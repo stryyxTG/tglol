@@ -260,15 +260,19 @@ def _make_accounts_zip(config: Config, accounts: list, stage: str) -> tuple[Path
     zip_path = unique_path(config.temp_dir, f"common_{stage}_{secrets.token_hex(4)}.zip")
     files_count = 0
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive_names: set[str] = set()
         for account in accounts:
             added_paths: set[str] = set()
-            folder = f"account_{account.id}"
             for path in _account_file_paths(account):
                 resolved = str(_resolved_path(path))
                 if resolved in added_paths or not path.exists() or not path.is_file():
                     continue
                 added_paths.add(resolved)
-                archive.write(path, arcname=f"{folder}/{path.name}")
+                archive_name = path.name
+                if archive_name in archive_names:
+                    archive_name = f"{account.id}_{path.name}"
+                archive_names.add(archive_name)
+                archive.write(path, arcname=archive_name)
                 files_count += 1
     return zip_path, files_count
 
