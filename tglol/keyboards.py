@@ -133,6 +133,7 @@ def account_detail_menu(
 ) -> InlineKeyboardMarkup:
     back = f"accounts:page:{origin}:{ref_id}:{page}"
     builder = InlineKeyboardBuilder()
+    builder.button(text="Скопировать номер", callback_data=f"accounts:phone:{account_id}")
     builder.button(text="Скачать session", callback_data=f"accounts:file:session:{account_id}")
     builder.button(text="Скачать JSON", callback_data=f"accounts:file:json:{account_id}")
     builder.button(text="Выдать воркеру", callback_data=f"account:assign:{account_id}:{origin}:{ref_id}:{page}")
@@ -329,6 +330,7 @@ def worker_self_account_detail_menu(
     account_stage: str = "nereg",
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.button(text="Скопировать номер", callback_data=f"worker:self_phone:{account_id}")
     builder.button(text="Получить код из Verification Codes", callback_data=f"worker:self_code:{account_id}")
     if account_stage == "reg":
         builder.button(

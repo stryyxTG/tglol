@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from html import escape
 from math import ceil
 from pathlib import Path
 import re
@@ -101,6 +102,7 @@ class AccessMiddleware(BaseMiddleware):
                     or callback_data.startswith("worker:self:page:")
                     or callback_data.startswith("worker:self_account:")
                     or callback_data.startswith("worker:self_code:")
+                    or callback_data.startswith("worker:self_phone:")
                     or callback_data.startswith("worker:self_stage_")
                 )
                 if allowed:
@@ -131,6 +133,23 @@ def _pages(total: int) -> int:
 
 def _account_name(account) -> str:
     return str(account.phone or account.username or account.telegram_user_id or "без данных")
+
+
+def _text(value) -> str:
+    return escape(str(value)) if value not in (None, "") else "-"
+
+
+def _copyable(value) -> str:
+    return f"<code>{escape(str(value))}</code>" if value not in (None, "") else "-"
+
+
+def _username(value) -> str:
+    if value in (None, ""):
+        return "-"
+    username = str(value)
+    if not username.startswith("@"):
+        username = f"@{username}"
+    return f"<code>{escape(username)}</code>"
 
 
 def _worker_name(worker) -> str:
@@ -368,27 +387,25 @@ def _account_detail_text(account, config: Config) -> str:
     department = get_department(config, account.department_id) if account.department_id else None
     stage = "РЕГ" if account.account_stage == "reg" else "НЕРЕГ"
     return (
-        f"Аккаунт #{account.id}\n"
-        f"Статус: {account.status}\n"
-        f"Раздел: {stage}\n"
-        f"Телефон: {account.phone or '-'}\n"
-        f"User ID: {account.telegram_user_id or '-'}\n"
-        f"Username: {account.username or '-'}\n"
-        f"JSON: {account.json_source}\n"
-        f"Источник: {account.source_type}\n"
-        f"Воркер: {_worker_name(worker)}\n"
-        f"Отдел: {department['name'] if department else '-'}"
+        f"<b>Аккаунт #{account.id}</b> · {stage}\n"
+        f"Статус: <code>{_text(account.status)}</code>\n\n"
+        f"Телефон:\n{_copyable(account.phone)}\n\n"
+        f"Username: {_username(account.username)}\n"
+        f"User ID: {_copyable(account.telegram_user_id)}\n\n"
+        f"JSON: {_text(account.json_source)}\n"
+        f"Источник: {_text(account.source_type)}\n"
+        f"Воркер: {_text(_worker_name(worker))}\n"
+        f"Отдел: {_text(department['name'] if department else None)}"
     )
 
 
 def _worker_account_detail_text(account) -> str:
     stage = "РЕГ" if account.account_stage == "reg" else "НЕРЕГ"
     return (
-        f"Аккаунт #{account.id}\n"
-        f"Статус: {account.status}\n"
-        f"Раздел: {stage}\n"
-        f"Телефон: {account.phone or '-'}\n"
-        f"Username: {account.username or '-'}"
+        f"<b>Аккаунт #{account.id}</b> · {stage}\n"
+        f"Статус: <code>{_text(account.status)}</code>\n\n"
+        f"Телефон:\n{_copyable(account.phone)}\n\n"
+        f"Username: {_username(account.username)}"
     )
 
 
@@ -1095,6 +1112,20 @@ async def confirm_worker_account_stage(callback: CallbackQuery, config: Config, 
     await callback.answer(done)
 
 
+@router.callback_query(F.data.startswith("worker:self_phone:"))
+async def send_worker_account_phone(callback: CallbackQuery, config: Config, current_worker) -> None:
+    raw_account_id = callback.data.rsplit(":", 1)[-1]
+    account = get_account(config, int(raw_account_id))
+    if not account or not _worker_can_access_account(account, current_worker):
+        await callback.answer("Аккаунт недоступен.", show_alert=True)
+        return
+    if not account.phone:
+        await callback.answer("Номер не указан.", show_alert=True)
+        return
+    await callback.message.answer(_copyable(account.phone))
+    await callback.answer("Номер отправлен.")
+
+
 @router.callback_query(F.data.startswith("worker:self_code:"))
 async def get_worker_self_account_code(callback: CallbackQuery, config: Config, current_worker) -> None:
     raw_account_id = callback.data.rsplit(":", 1)[-1]
@@ -1123,6 +1154,20 @@ async def get_worker_self_account_code(callback: CallbackQuery, config: Config, 
 
     await callback.message.answer(f"Код из Verification Codes: <code>{code}</code>")
     await callback.answer("Код найден.")
+
+
+@router.callback_query(F.data.startswith("accounts:phone:"))
+async def send_account_phone(callback: CallbackQuery, config: Config) -> None:
+    account_id = int(callback.data.rsplit(":", 1)[-1])
+    account = get_account(config, account_id)
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    if not account.phone:
+        await callback.answer("Номер не указан.", show_alert=True)
+        return
+    await callback.message.answer(_copyable(account.phone))
+    await callback.answer("Номер отправлен.")
 
 
 @router.callback_query(F.data.startswith("account:open:"))
