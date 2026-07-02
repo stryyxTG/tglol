@@ -16,10 +16,6 @@ class AddByZip(StatesGroup):
     waiting_zip = State()
 
 
-class CreateDepartment(StatesGroup):
-    waiting_name = State()
-
-
 class CreateWorker(StatesGroup):
     waiting_telegram_id = State()
 

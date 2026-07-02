@@ -15,9 +15,8 @@ def main_menu() -> InlineKeyboardMarkup:
     builder.button(text="Аккаунты", callback_data="accounts:menu")
     builder.button(text="Прокси", callback_data="proxies:menu")
     builder.button(text="Воркеры", callback_data="workers:menu")
-    builder.button(text="Отделы", callback_data="departments:menu")
     builder.button(text="Настройки", callback_data="settings:menu")
-    builder.adjust(2, 2, 1)
+    builder.adjust(2, 2)
     return builder.as_markup()
 
 
@@ -208,32 +207,6 @@ def worker_storage_keyboard(workers: Sequence) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def departments_menu(departments: Sequence) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    for department in departments:
-        builder.button(text=department["name"], callback_data=f"department:open:{department['id']}")
-    builder.button(text="Добавить отдел", callback_data="departments:add")
-    builder.button(text="Назад", callback_data="main:menu")
-    builder.adjust(*([1] * len(departments)), 1, 1)
-    return builder.as_markup()
-
-
-def department_detail_menu(department_id: int) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Удалить отдел", callback_data=f"department:delete:ask:{department_id}")
-    builder.button(text="Назад", callback_data="departments:menu")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def confirm_delete_department_menu(department_id: int) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Да, удалить", callback_data=f"department:delete:confirm:{department_id}")
-    builder.button(text="Отмена", callback_data=f"department:open:{department_id}")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
 def workers_menu(workers: Sequence) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for worker in workers:
@@ -270,16 +243,6 @@ def confirm_delete_worker_menu(worker_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def worker_department_select_menu(departments: Sequence) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    for department in departments:
-        builder.button(text=department["name"], callback_data=f"worker:add:dept:{department['id']}")
-    builder.button(text="Без отдела", callback_data="worker:add:dept:0")
-    builder.button(text="Отмена", callback_data="workers:menu")
-    builder.adjust(*([1] * len(departments)), 1, 1)
-    return builder.as_markup()
-
-
 def proxies_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Добавить прокси", callback_data="proxies:add")
@@ -288,7 +251,7 @@ def proxies_menu() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def worker_self_menu(*, department_name: str | None, nereg_count: int, reg_count: int) -> InlineKeyboardMarkup:
+def worker_self_menu(*, nereg_count: int, reg_count: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text=f"НЕРЕГ | {nereg_count}", callback_data="worker:self:page:nereg:0")
     builder.button(text=f"РЕГ | {reg_count}", callback_data="worker:self:page:reg:0")

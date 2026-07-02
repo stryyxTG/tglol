@@ -15,21 +15,17 @@ from telethon.errors import SessionPasswordNeededError
 
 from tglol.config import Config
 from tglol.db import (
-    add_department,
     add_proxy,
     add_worker,
     assign_account_to_worker,
     assign_proxy_to_worker,
     count_accounts,
     count_accounts_by_stage,
-    delete_department,
     delete_worker,
     get_account,
-    get_department,
     get_worker,
     get_worker_by_telegram_id,
     list_accounts,
-    list_departments,
     list_proxies,
     list_workers,
     proxy_exists,
@@ -49,16 +45,12 @@ from tglol.keyboards import (
     assign_account_keyboard,
     confirm_account_stage_menu,
     confirm_worker_account_stage_menu,
-    confirm_delete_department_menu,
     confirm_delete_worker_menu,
-    department_detail_menu,
-    departments_menu,
     digit_code_keyboard,
     main_menu,
     placeholder_menu,
     proxies_menu,
     skip_json_menu,
-    worker_department_select_menu,
     worker_account_sections_menu,
     worker_detail_menu,
     worker_self_account_detail_menu,
@@ -68,7 +60,7 @@ from tglol.keyboards import (
     workers_menu,
 )
 from tglol.paths import unique_path
-from tglol.states import AddByCode, AddBySession, AddByZip, AddProxy, AssignProxy, CreateDepartment, CreateWorker
+from tglol.states import AddByCode, AddBySession, AddByZip, AddProxy, AssignProxy, CreateWorker
 from tglol.telegram_service import get_latest_telegram_code, send_code, sign_in_code, sign_in_password, user_fields
 
 router = Router()
@@ -159,8 +151,6 @@ def _worker_name(worker) -> str:
 
 
 def _worker_scope(worker) -> tuple[int | None | str, int | None | str]:
-    if worker["department_id"]:
-        return "any", worker["department_id"]
     return worker["id"], "any"
 
 
@@ -187,14 +177,7 @@ def _worker_account_counts(config: Config, worker) -> tuple[int, int, int]:
 
 
 def _worker_can_access_account(account, worker) -> bool:
-    if worker["department_id"]:
-        return account.department_id == worker["department_id"]
     return account.worker_id == worker["id"]
-
-
-def _worker_department_title(config: Config, worker) -> str:
-    department = get_department(config, worker["department_id"]) if worker["department_id"] else None
-    return department["name"] if department else "Без отдела"
 
 
 def _worker_stage_title(stage: str) -> str:
@@ -288,14 +271,13 @@ async def _show_worker_home_callback(callback: CallbackQuery, config: Config, wo
     nereg_count, reg_count = _worker_counts(config, worker)
     text = (
         f"Рабочая панель\n"
-        f"Отдел: {_worker_department_title(config, worker)}\n\n"
+        f"Воркер: {_worker_name(worker)}\n\n"
         f"НЕРЕГ: {nereg_count}\n"
         f"РЕГ: {reg_count}"
     )
     await callback.message.edit_text(
         text,
         reply_markup=worker_self_menu(
-            department_name=_worker_department_title(config, worker),
             nereg_count=nereg_count,
             reg_count=reg_count,
         ),
@@ -307,14 +289,13 @@ async def _show_worker_home_message(message: Message, config: Config, worker) ->
     nereg_count, reg_count = _worker_counts(config, worker)
     text = (
         f"Рабочая панель\n"
-        f"Отдел: {_worker_department_title(config, worker)}\n\n"
+        f"Воркер: {_worker_name(worker)}\n\n"
         f"НЕРЕГ: {nereg_count}\n"
         f"РЕГ: {reg_count}"
     )
     await message.answer(
         text,
         reply_markup=worker_self_menu(
-            department_name=_worker_department_title(config, worker),
             nereg_count=nereg_count,
             reg_count=reg_count,
         ),
@@ -384,7 +365,6 @@ async def _show_account_page(callback: CallbackQuery, config: Config, origin: st
 
 def _account_detail_text(account, config: Config) -> str:
     worker = get_worker(config, account.worker_id) if account.worker_id else None
-    department = get_department(config, account.department_id) if account.department_id else None
     stage = "РЕГ" if account.account_stage == "reg" else "НЕРЕГ"
     return (
         f"<b>Аккаунт #{account.id}</b> · {stage}\n"
@@ -394,8 +374,7 @@ def _account_detail_text(account, config: Config) -> str:
         f"User ID: {_copyable(account.telegram_user_id)}\n\n"
         f"JSON: {_text(account.json_source)}\n"
         f"Источник: {_text(account.source_type)}\n"
-        f"Воркер: {_text(_worker_name(worker))}\n"
-        f"Отдел: {_text(department['name'] if department else None)}"
+        f"Воркер: {_text(_worker_name(worker))}"
     )
 
 
@@ -999,7 +978,7 @@ async def show_worker_self_accounts(callback: CallbackQuery, config: Config, cur
         account_stage=stage,
     )
     text = (
-        f"Отдел: {_worker_department_title(config, current_worker)}\n"
+        f"Воркер: {_worker_name(current_worker)}\n"
         f"Раздел: {_worker_stage_title(stage)}\n\n"
     )
     if total:
@@ -1361,69 +1340,6 @@ async def confirm_account_stage(callback: CallbackQuery, config: Config) -> None
     await callback.answer(done)
 
 
-@router.callback_query(F.data == "departments:menu")
-async def show_departments(callback: CallbackQuery, config: Config) -> None:
-    departments = list_departments(config)
-    text = "Отделы"
-    if not departments:
-        text += "\n\nОтделов пока нет."
-    await callback.message.edit_text(text, reply_markup=departments_menu(departments))
-    await callback.answer()
-
-
-@router.callback_query(F.data == "departments:add")
-async def add_department_start(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(CreateDepartment.waiting_name)
-    await callback.message.edit_text("Отправь название отдела.")
-    await callback.answer()
-
-
-@router.message(CreateDepartment.waiting_name)
-async def add_department_finish(message: Message, state: FSMContext, config: Config) -> None:
-    name = (message.text or "").strip()
-    if not name:
-        await message.answer("Название пустое.")
-        return
-    department_id = add_department(config, name, utc_now_iso())
-    await state.clear()
-    await message.answer(f"Отдел создан: {name}", reply_markup=departments_menu(list_departments(config)))
-
-
-@router.callback_query(F.data.startswith("department:open:"))
-async def open_department(callback: CallbackQuery, config: Config) -> None:
-    department_id = int(callback.data.rsplit(":", 1)[-1])
-    department = get_department(config, department_id)
-    if not department:
-        await callback.answer("Отдел не найден.", show_alert=True)
-        return
-    workers_count = sum(1 for worker in list_workers(config) if worker["department_id"] == department_id)
-    text = f"Отдел\nНазвание: {department['name']}\nВоркеров: {workers_count}"
-    await callback.message.edit_text(text, reply_markup=department_detail_menu(department_id))
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("department:delete:ask:"))
-async def ask_delete_department(callback: CallbackQuery, config: Config) -> None:
-    department_id = int(callback.data.rsplit(":", 1)[-1])
-    department = get_department(config, department_id)
-    if not department:
-        await callback.answer("Отдел не найден.", show_alert=True)
-        return
-    await callback.message.edit_text(
-        f"Удалить отдел «{department['name']}»?\nСвязанные воркеры останутся, но будут без отдела.",
-        reply_markup=confirm_delete_department_menu(department_id),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("department:delete:confirm:"))
-async def confirm_delete_department(callback: CallbackQuery, config: Config) -> None:
-    department_id = int(callback.data.rsplit(":", 1)[-1])
-    delete_department(config, department_id)
-    await callback.message.edit_text("Отдел удален.", reply_markup=departments_menu(list_departments(config)))
-    await callback.answer()
-
-
 @router.callback_query(F.data == "workers:menu")
 async def show_workers(callback: CallbackQuery, config: Config) -> None:
     workers = list_workers(config)
@@ -1442,41 +1358,24 @@ async def add_worker_start(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(CreateWorker.waiting_telegram_id)
-async def add_worker_choose_department(message: Message, state: FSMContext, config: Config) -> None:
+async def add_worker_finish(message: Message, state: FSMContext, config: Config) -> None:
     raw = (message.text or "").strip()
     if not raw.isdigit():
         await message.answer("Telegram ID должен быть числом.")
         return
-    await state.update_data(worker_telegram_id=int(raw))
-    departments = list_departments(config)
-    await message.answer(
-        "Теперь выбери отдел, к которому у воркера будет доступ.",
-        reply_markup=worker_department_select_menu(departments),
-    )
-
-
-@router.callback_query(CreateWorker.waiting_telegram_id, F.data.startswith("worker:add:dept:"))
-async def add_worker_finish(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
-    department_id = int(callback.data.rsplit(":", 1)[-1])
-    if department_id and not get_department(config, department_id):
-        await callback.answer("Отдел не найден.", show_alert=True)
-        return
-    data = await state.get_data()
-    telegram_id = int(data["worker_telegram_id"])
+    telegram_id = int(raw)
     worker_id = add_worker(
         config,
         name=f"Воркер {telegram_id}",
         telegram_id=telegram_id,
-        department_id=None if department_id == 0 else department_id,
+        department_id=None,
         created_at=utc_now_iso(),
     )
-    department = get_department(config, department_id) if department_id else None
     await state.clear()
-    await callback.message.edit_text(
-        f"Воркер создан\nTelegram ID: {telegram_id}\nОтдел: {department['name'] if department else '-'}",
+    await message.answer(
+        f"Воркер создан\nID воркера: {worker_id}\nTelegram ID: {telegram_id}\n\nДоступ выдан к его хранилищу.",
         reply_markup=workers_menu(list_workers(config)),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("worker:open:"))
@@ -1486,13 +1385,11 @@ async def open_worker(callback: CallbackQuery, config: Config) -> None:
     if not worker:
         await callback.answer("Воркер не найден.", show_alert=True)
         return
-    department = get_department(config, worker["department_id"]) if worker["department_id"] else None
     accounts_total, nereg_count, reg_count = _worker_account_counts(config, worker)
     text = (
         f"Воркер\n"
         f"Имя: {worker['name']}\n"
         f"Telegram ID: {worker['telegram_id'] or '-'}\n"
-        f"Отдел: {department['name'] if department else '-'}\n"
         f"Аккаунтов: {accounts_total}\n"
         f"НЕРЕГ: {nereg_count}\n"
         f"РЕГ: {reg_count}"

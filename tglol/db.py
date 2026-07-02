@@ -38,12 +38,6 @@ CREATE TABLE IF NOT EXISTS workers (
     created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS departments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS proxies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     proxy TEXT NOT NULL,
@@ -89,7 +83,8 @@ def init_db(config: Config) -> None:
         _ensure_column(connection, "accounts", "worker_id", "INTEGER")
         _ensure_column(connection, "accounts", "department_id", "INTEGER")
         _ensure_column(connection, "accounts", "account_stage", "TEXT NOT NULL DEFAULT 'nereg'")
-        connection.execute("UPDATE accounts SET department_id = NULL WHERE worker_id IS NULL")
+        connection.execute("UPDATE workers SET department_id = NULL")
+        connection.execute("UPDATE accounts SET department_id = NULL")
 
 
 def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -195,32 +190,6 @@ def set_account_stage(config: Config, account_id: int, account_stage: str) -> No
         )
 
 
-def add_department(config: Config, name: str, created_at: str) -> int:
-    with connect(config) as connection:
-        cursor = connection.execute(
-            "INSERT INTO departments (name, created_at) VALUES (?, ?)",
-            (name, created_at),
-        )
-        return int(cursor.lastrowid)
-
-
-def list_departments(config: Config) -> list[sqlite3.Row]:
-    with connect(config) as connection:
-        return connection.execute("SELECT * FROM departments ORDER BY id DESC").fetchall()
-
-
-def get_department(config: Config, department_id: int) -> sqlite3.Row | None:
-    with connect(config) as connection:
-        return connection.execute("SELECT * FROM departments WHERE id = ?", (department_id,)).fetchone()
-
-
-def delete_department(config: Config, department_id: int) -> None:
-    with connect(config) as connection:
-        connection.execute("UPDATE workers SET department_id = NULL WHERE department_id = ?", (department_id,))
-        connection.execute("UPDATE accounts SET department_id = NULL WHERE department_id = ?", (department_id,))
-        connection.execute("DELETE FROM departments WHERE id = ?", (department_id,))
-
-
 def add_worker(
     config: Config,
     *,
@@ -267,13 +236,9 @@ def delete_worker(config: Config, worker_id: int) -> None:
 
 def assign_account_to_worker(config: Config, account_id: int, worker_id: int | None) -> None:
     with connect(config) as connection:
-        department_id = None
-        if worker_id is not None:
-            worker = connection.execute("SELECT department_id FROM workers WHERE id = ?", (worker_id,)).fetchone()
-            department_id = worker["department_id"] if worker else None
         connection.execute(
             "UPDATE accounts SET worker_id = ?, department_id = ?, updated_at = datetime('now') WHERE id = ?",
-            (worker_id, department_id, account_id),
+            (worker_id, None, account_id),
         )
 
 
