@@ -12,6 +12,7 @@ from telethon.tl.types import User
 
 
 CODE_RE = re.compile(r"(?<!\d)(\d[\d\s-]{2,14}\d)(?!\d)")
+CODE_CONTEXT_RE = re.compile(r"\b(code|verification|verify|otp|passcode|парол|код|подтверж)\b", re.IGNORECASE)
 VERIFICATION_CODE_PEERS = ("VerificationCodes", "@VerificationCodes")
 logger = logging.getLogger(__name__)
 
@@ -169,6 +170,19 @@ def user_fields(user: User | None) -> dict[str, Any]:
     }
 
 
+def extract_verification_codes(text: str) -> list[str]:
+    candidates: list[str] = []
+    for match in CODE_RE.finditer(text or ""):
+        code = re.sub(r"\D+", "", match.group(1))
+        if 4 <= len(code) <= 8:
+            candidates.append(code)
+    if not candidates:
+        return []
+    if CODE_CONTEXT_RE.search(text or ""):
+        return candidates
+    return []
+
+
 async def get_latest_telegram_code(
     session_path: Path,
     api_id: int,
@@ -187,11 +201,9 @@ async def get_latest_telegram_code(
             try:
                 async for message in client.iter_messages(peer, limit=limit):
                     text = message.message or ""
-                    match = CODE_RE.search(text)
-                    if match:
-                        code = re.sub(r"\D+", "", match.group(1))
-                        if 4 <= len(code) <= 8:
-                            return code
+                    codes = extract_verification_codes(text)
+                    if codes:
+                        return codes[0]
             except Exception as exc:
                 logger.info("Cannot read verification codes from peer %s: %s", peer, exc)
                 continue

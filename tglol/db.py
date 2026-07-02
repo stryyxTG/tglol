@@ -89,6 +89,7 @@ def init_db(config: Config) -> None:
         _ensure_column(connection, "accounts", "worker_id", "INTEGER")
         _ensure_column(connection, "accounts", "department_id", "INTEGER")
         _ensure_column(connection, "accounts", "account_stage", "TEXT NOT NULL DEFAULT 'nereg'")
+        connection.execute("UPDATE accounts SET department_id = NULL WHERE worker_id IS NULL")
 
 
 def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -259,7 +260,7 @@ def worker_exists(config: Config, worker_id: int) -> bool:
 
 def delete_worker(config: Config, worker_id: int) -> None:
     with connect(config) as connection:
-        connection.execute("UPDATE accounts SET worker_id = NULL WHERE worker_id = ?", (worker_id,))
+        connection.execute("UPDATE accounts SET worker_id = NULL, department_id = NULL WHERE worker_id = ?", (worker_id,))
         connection.execute("UPDATE proxies SET worker_id = NULL WHERE worker_id = ?", (worker_id,))
         connection.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
 

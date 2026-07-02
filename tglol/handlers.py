@@ -144,6 +144,28 @@ def _worker_scope(worker) -> tuple[int | None | str, int | None | str]:
     return worker["id"], "any"
 
 
+def _worker_account_counts(config: Config, worker) -> tuple[int, int, int]:
+    worker_id, department_id = _worker_scope(worker)
+    total = count_accounts_by_stage(
+        config,
+        worker_id=worker_id,
+        department_id=department_id,
+    )
+    nereg_count = count_accounts_by_stage(
+        config,
+        worker_id=worker_id,
+        department_id=department_id,
+        account_stage="nereg",
+    )
+    reg_count = count_accounts_by_stage(
+        config,
+        worker_id=worker_id,
+        department_id=department_id,
+        account_stage="reg",
+    )
+    return total, nereg_count, reg_count
+
+
 def _worker_can_access_account(account, worker) -> bool:
     if worker["department_id"]:
         return account.department_id == worker["department_id"]
@@ -238,19 +260,7 @@ def _promote_login_session(config: Config, temp_session_path: Path, phone: str, 
 
 
 def _worker_counts(config: Config, worker) -> tuple[int, int]:
-    worker_id, department_id = _worker_scope(worker)
-    nereg_count = count_accounts_by_stage(
-        config,
-        worker_id=worker_id,
-        department_id=department_id,
-        account_stage="nereg",
-    )
-    reg_count = count_accounts_by_stage(
-        config,
-        worker_id=worker_id,
-        department_id=department_id,
-        account_stage="reg",
-    )
+    _, nereg_count, reg_count = _worker_account_counts(config, worker)
     return nereg_count, reg_count
 
 
@@ -292,24 +302,39 @@ async def _show_worker_home_message(message: Message, config: Config, worker) ->
 
 
 async def _show_account_page(callback: CallbackQuery, config: Config, origin: str, ref_id: int, page: int) -> None:
+    worker = None
     worker_filter: int | None | str = None if origin == "common" else ref_id
+    department_filter: int | None | str = None if origin == "common" else "any"
     account_stage = None
     if origin == "worker_nereg":
         account_stage = "nereg"
     elif origin == "worker_reg":
         account_stage = "reg"
-    total = count_accounts_by_stage(config, worker_id=worker_filter, account_stage=account_stage)
+
+    if origin in {"worker", "worker_nereg", "worker_reg"}:
+        worker = get_worker(config, ref_id)
+        if not worker:
+            await callback.answer("Воркер не найден.", show_alert=True)
+            return
+        worker_filter, department_filter = _worker_scope(worker)
+
+    total = count_accounts_by_stage(
+        config,
+        worker_id=worker_filter,
+        department_id=department_filter,
+        account_stage=account_stage,
+    )
     page = max(0, min(page, _pages(total) - 1))
     accounts = list_accounts(
         config,
         limit=ACCOUNTS_PER_PAGE,
         offset=page * ACCOUNTS_PER_PAGE,
         worker_id=worker_filter,
+        department_id=department_filter,
         account_stage=account_stage,
     )
 
     if origin in {"worker", "worker_nereg", "worker_reg"}:
-        worker = get_worker(config, ref_id)
         section = ""
         if origin == "worker_nereg":
             section = "\nРаздел: НЕРЕГ"
@@ -765,7 +790,10 @@ async def add_zip_file(message: Message, bot: Bot, state: FSMContext, config: Co
 
     lines = [summary, ""]
     for result in results[:20]:
-        lines.append(f"#{result.account_id} | {result.status} | {result.phone or result.username or '-'}")
+        if result.account_id:
+            lines.append(f"#{result.account_id} | {result.status} | {result.phone or result.username or '-'}")
+        else:
+            lines.append(f"ERROR | {result.note or 'unknown error'}")
     if len(results) > 20:
         lines.append(f"...и еще {len(results) - 20}")
     await state.clear()
@@ -812,8 +840,7 @@ async def show_worker_account_sections(callback: CallbackQuery, config: Config) 
     if not worker:
         await callback.answer("Воркер не найден.", show_alert=True)
         return
-    nereg_count = count_accounts_by_stage(config, worker_id=worker_id, account_stage="nereg")
-    reg_count = count_accounts_by_stage(config, worker_id=worker_id, account_stage="reg")
+    _, nereg_count, reg_count = _worker_account_counts(config, worker)
     text = (
         f"Хранилище воркера\n{_worker_name(worker)}\n\n"
         f"НЕРЕГ: {nereg_count}\n"
@@ -1315,9 +1342,7 @@ async def open_worker(callback: CallbackQuery, config: Config) -> None:
         await callback.answer("Воркер не найден.", show_alert=True)
         return
     department = get_department(config, worker["department_id"]) if worker["department_id"] else None
-    accounts_total = count_accounts(config, worker_id)
-    nereg_count = count_accounts_by_stage(config, worker_id=worker_id, account_stage="nereg")
-    reg_count = count_accounts_by_stage(config, worker_id=worker_id, account_stage="reg")
+    accounts_total, nereg_count, reg_count = _worker_account_counts(config, worker)
     text = (
         f"Воркер\n"
         f"Имя: {worker['name']}\n"

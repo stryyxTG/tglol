@@ -208,25 +208,38 @@ async def import_zip(
 
     results: list[ImportResult] = []
     for session_tmp, json_tmp in matches.items():
-        final_session = unique_path(config.sessions_dir, session_tmp.name)
-        shutil.copy2(session_tmp, final_session)
-        final_json = None
-        if json_tmp:
-            final_json = unique_path(config.json_dir, json_tmp.name)
-            shutil.copy2(json_tmp, final_json)
-        result = await import_session_account(
-            config,
-            session_path=final_session,
-            json_path=final_json,
-            source_type="zip",
-            created_by=created_by,
-        )
+        try:
+            final_session = unique_path(config.sessions_dir, session_tmp.name)
+            shutil.copy2(session_tmp, final_session)
+            final_json = None
+            if json_tmp:
+                final_json = unique_path(config.json_dir, json_tmp.name)
+                shutil.copy2(json_tmp, final_json)
+            result = await import_session_account(
+                config,
+                session_path=final_session,
+                json_path=final_json,
+                source_type="zip",
+                created_by=created_by,
+            )
+        except Exception as exc:
+            result = ImportResult(
+                account_id=0,
+                status="error",
+                phone=None,
+                username=None,
+                source="zip",
+                note=f"{session_tmp.name}: {exc}",
+            )
         results.append(result)
 
+    imported_count = sum(1 for result in results if result.account_id)
+    error_count = sum(1 for result in results if result.status == "error")
     summary = (
         f"SESSION: {len(session_files)}\n"
         f"JSON: {len(json_files)}\n"
-        f"Импортировано: {len(results)}\n"
+        f"Импортировано: {imported_count}\n"
+        f"Ошибок: {error_count}\n"
         f"Без JSON: {sum(1 for value in matches.values() if value is None)}"
     )
     return results, summary
