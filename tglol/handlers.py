@@ -46,6 +46,7 @@ from tglol.keyboards import (
     add_account_menu,
     assign_account_keyboard,
     confirm_account_stage_menu,
+    confirm_worker_account_stage_menu,
     confirm_delete_department_menu,
     confirm_delete_worker_menu,
     department_detail_menu,
@@ -99,6 +100,7 @@ class AccessMiddleware(BaseMiddleware):
                     or callback_data.startswith("worker:self:page:")
                     or callback_data.startswith("worker:self_account:")
                     or callback_data.startswith("worker:self_code:")
+                    or callback_data.startswith("worker:self_stage_")
                 )
                 if allowed:
                     return await handler(event, data)
@@ -881,9 +883,89 @@ async def show_worker_self_account(callback: CallbackQuery, config: Config, curr
         return
     await callback.message.edit_text(
         _worker_account_detail_text(account),
-        reply_markup=worker_self_account_detail_menu(account.id, stage=stage, page=int(raw_page)),
+        reply_markup=worker_self_account_detail_menu(
+            account.id,
+            stage=stage,
+            page=int(raw_page),
+            account_stage=account.account_stage,
+        ),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("worker:self_stage_ask1:"))
+async def ask_worker_account_stage_first(callback: CallbackQuery, config: Config, current_worker) -> None:
+    _, _, raw_account_id, target_stage, origin_stage, raw_page = callback.data.split(":", 5)
+    account = get_account(config, int(raw_account_id))
+    if not account or not _worker_can_access_account(account, current_worker):
+        await callback.answer("Аккаунт недоступен.", show_alert=True)
+        return
+    if target_stage == "reg":
+        text = "ВЫ УВЕРЕНЫ ЧТО ХОТИТЕ ПОМЕТИТЬ АКК РЕГАННЫМ?"
+    else:
+        text = "ВЫ УВЕРЕНЫ ЧТО ХОТИТЕ ПЕРЕНЕСТИ АКК В НЕРЕГ?"
+    await callback.message.edit_text(
+        text,
+        reply_markup=confirm_worker_account_stage_menu(
+            account.id,
+            target_stage,
+            origin_stage,
+            int(raw_page),
+            step=1,
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("worker:self_stage_ask2:"))
+async def ask_worker_account_stage_second(callback: CallbackQuery, config: Config, current_worker) -> None:
+    _, _, raw_account_id, target_stage, origin_stage, raw_page = callback.data.split(":", 5)
+    account = get_account(config, int(raw_account_id))
+    if not account or not _worker_can_access_account(account, current_worker):
+        await callback.answer("Аккаунт недоступен.", show_alert=True)
+        return
+    if target_stage == "reg":
+        text = "ПОДТВЕРДИТЕ ЕЩЕ РАЗ: ПОМЕТИТЬ АКК РЕГАННЫМ?"
+    else:
+        text = "ПОДТВЕРДИТЕ ЕЩЕ РАЗ: ПЕРЕНЕСТИ АКК В НЕРЕГ?"
+    await callback.message.edit_text(
+        text,
+        reply_markup=confirm_worker_account_stage_menu(
+            account.id,
+            target_stage,
+            origin_stage,
+            int(raw_page),
+            step=2,
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("worker:self_stage_confirm:"))
+async def confirm_worker_account_stage(callback: CallbackQuery, config: Config, current_worker) -> None:
+    _, _, raw_account_id, target_stage, _origin_stage, _raw_page = callback.data.split(":", 5)
+    account_id = int(raw_account_id)
+    account = get_account(config, account_id)
+    if not account or not _worker_can_access_account(account, current_worker):
+        await callback.answer("Аккаунт недоступен.", show_alert=True)
+        return
+    set_account_stage(config, account_id, target_stage)
+    account = get_account(config, account_id)
+    if not account or not _worker_can_access_account(account, current_worker):
+        await callback.answer("Аккаунт недоступен.", show_alert=True)
+        return
+    new_stage = "reg" if account.account_stage == "reg" else "nereg"
+    await callback.message.edit_text(
+        _worker_account_detail_text(account),
+        reply_markup=worker_self_account_detail_menu(
+            account.id,
+            stage=new_stage,
+            page=0,
+            account_stage=account.account_stage,
+        ),
+    )
+    done = "Аккаунт перенесен в РЕГ." if target_stage == "reg" else "Аккаунт перенесен в НЕРЕГ."
+    await callback.answer(done)
 
 
 @router.callback_query(F.data.startswith("worker:self_code:"))

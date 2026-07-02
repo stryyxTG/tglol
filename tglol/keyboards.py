@@ -308,9 +308,44 @@ def worker_self_accounts_page_keyboard(
     return builder.as_markup()
 
 
-def worker_self_account_detail_menu(account_id: int, *, stage: str, page: int) -> InlineKeyboardMarkup:
+def worker_self_account_detail_menu(
+    account_id: int,
+    *,
+    stage: str,
+    page: int,
+    account_stage: str = "nereg",
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Получить код из Verification Codes", callback_data=f"worker:self_code:{account_id}")
+    if account_stage == "reg":
+        builder.button(
+            text="Перенести в НЕРЕГ",
+            callback_data=f"worker:self_stage_ask1:{account_id}:nereg:{stage}:{page}",
+        )
+    else:
+        builder.button(
+            text="Пометить зареганным",
+            callback_data=f"worker:self_stage_ask1:{account_id}:reg:{stage}:{page}",
+        )
     builder.button(text="Назад", callback_data=f"worker:self:page:{stage}:{page}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def confirm_worker_account_stage_menu(
+    account_id: int,
+    target_stage: str,
+    origin_stage: str,
+    page: int,
+    step: int,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    next_step = "ask2" if step == 1 else "confirm"
+    label = "ДА, ПРОДОЛЖИТЬ" if step == 1 else "ДА, ПОДТВЕРЖДАЮ"
+    builder.button(
+        text=label,
+        callback_data=f"worker:self_stage_{next_step}:{account_id}:{target_stage}:{origin_stage}:{page}",
+    )
+    builder.button(text="Отмена", callback_data=f"worker:self_account:{account_id}:{origin_stage}:{page}")
     builder.adjust(1)
     return builder.as_markup()
