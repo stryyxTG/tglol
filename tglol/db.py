@@ -140,6 +140,23 @@ def list_accounts(
     return [Account(**dict(row)) for row in rows]
 
 
+def list_accounts_by_scope(
+    config: Config,
+    *,
+    worker_id: int | None | str = "any",
+    account_stage: str | None = None,
+    department_id: int | None | str = "any",
+) -> list[Account]:
+    return list_accounts(
+        config,
+        limit=100000,
+        offset=0,
+        worker_id=worker_id,
+        account_stage=account_stage,
+        department_id=department_id,
+    )
+
+
 def get_account(config: Config, account_id: int) -> Account | None:
     with connect(config) as connection:
         row = connection.execute(
@@ -188,6 +205,73 @@ def set_account_stage(config: Config, account_id: int, account_stage: str) -> No
             "UPDATE accounts SET account_stage = ?, updated_at = datetime('now') WHERE id = ?",
             (account_stage, account_id),
         )
+
+
+def set_account_worker_and_stage(
+    config: Config,
+    account_id: int,
+    worker_id: int | None,
+    account_stage: str,
+) -> None:
+    if account_stage not in {"nereg", "reg"}:
+        raise ValueError("unknown account stage")
+    with connect(config) as connection:
+        connection.execute(
+            """
+            UPDATE accounts
+            SET worker_id = ?, department_id = NULL, account_stage = ?, updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (worker_id, account_stage, account_id),
+        )
+
+
+def move_accounts_to_common_by_scope(
+    config: Config,
+    *,
+    worker_id: int,
+    source_stage: str,
+    target_stage: str,
+) -> int:
+    if source_stage not in {"nereg", "reg"} or target_stage not in {"nereg", "reg"}:
+        raise ValueError("unknown account stage")
+    with connect(config) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE accounts
+            SET worker_id = NULL, department_id = NULL, account_stage = ?, updated_at = datetime('now')
+            WHERE worker_id = ? AND account_stage = ?
+            """,
+            (target_stage, worker_id, source_stage),
+        )
+        return int(cursor.rowcount or 0)
+
+
+def delete_account_row(config: Config, account_id: int) -> None:
+    with connect(config) as connection:
+        connection.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+
+
+def delete_accounts_by_scope(
+    config: Config,
+    *,
+    worker_id: int | None,
+    account_stage: str,
+) -> int:
+    if account_stage not in {"nereg", "reg"}:
+        raise ValueError("unknown account stage")
+    if worker_id is None:
+        where = "worker_id IS NULL AND account_stage = ?"
+        params: tuple[Any, ...] = (account_stage,)
+    else:
+        where = "worker_id = ? AND account_stage = ?"
+        params = (worker_id, account_stage)
+    with connect(config) as connection:
+        cursor = connection.execute(
+            f"DELETE FROM accounts WHERE {where}",
+            params,
+        )
+        return int(cursor.rowcount or 0)
 
 
 def add_worker(

@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import zipfile
 
 from aiogram import BaseMiddleware, Bot, F, Router
 from aiogram.filters import CommandStart
@@ -19,16 +20,20 @@ from tglol.db import (
     add_worker,
     assign_account_to_worker,
     assign_proxy_to_worker,
-    count_accounts,
     count_accounts_by_stage,
+    delete_account_row,
+    delete_accounts_by_scope,
     delete_worker,
     get_account,
     get_worker,
     get_worker_by_telegram_id,
     list_accounts,
+    list_accounts_by_scope,
     list_proxies,
     list_workers,
+    move_accounts_to_common_by_scope,
     proxy_exists,
+    set_account_worker_and_stage,
     set_account_stage,
     worker_exists,
 )
@@ -43,7 +48,12 @@ from tglol.keyboards import (
     add_account_menu,
     add_account_target_menu,
     assign_account_keyboard,
+    common_storage_sections_menu,
+    common_target_stage_menu,
+    confirm_bulk_return_menu,
     confirm_account_stage_menu,
+    confirm_delete_account_menu,
+    confirm_delete_common_stage_menu,
     confirm_worker_account_stage_menu,
     confirm_delete_worker_menu,
     digit_code_keyboard,
@@ -184,6 +194,85 @@ def _worker_stage_title(stage: str) -> str:
     return "РЕГ" if stage == "reg" else "НЕРЕГ"
 
 
+def _common_account_counts(config: Config) -> tuple[int, int]:
+    nereg_count = count_accounts_by_stage(config, worker_id=None, account_stage="nereg")
+    reg_count = count_accounts_by_stage(config, worker_id=None, account_stage="reg")
+    return nereg_count, reg_count
+
+
+def _stage_title(stage: str) -> str:
+    return "РЕГ" if stage == "reg" else "НЕРЕГ"
+
+
+def _account_file_paths(account) -> list[Path]:
+    paths: list[Path] = []
+    for raw in (account.session_path, account.json_original_path, account.json_effective_path):
+        if raw:
+            path = Path(raw)
+            if path not in paths:
+                paths.append(path)
+    return paths
+
+
+def _resolved_path(path: Path) -> Path:
+    return path.expanduser().resolve(strict=False)
+
+
+def _is_allowed_storage_file(config: Config, path: Path) -> bool:
+    resolved = _resolved_path(path)
+    allowed_roots = (config.data_dir, config.sessions_dir, config.json_dir, config.temp_dir)
+    for root in allowed_roots:
+        try:
+            resolved.relative_to(_resolved_path(root))
+            return path.exists() and path.is_file()
+        except ValueError:
+            continue
+    return False
+
+
+def _delete_local_account_files(config: Config, accounts: list) -> int:
+    selected_ids = {account.id for account in accounts}
+    remaining_paths = {
+        str(_resolved_path(path))
+        for account in list_accounts_by_scope(config)
+        if account.id not in selected_ids
+        for path in _account_file_paths(account)
+    }
+    removed = 0
+    seen: set[str] = set()
+    for account in accounts:
+        for path in _account_file_paths(account):
+            resolved = str(_resolved_path(path))
+            if resolved in seen or resolved in remaining_paths:
+                continue
+            seen.add(resolved)
+            if not _is_allowed_storage_file(config, path):
+                continue
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                continue
+    return removed
+
+
+def _make_accounts_zip(config: Config, accounts: list, stage: str) -> tuple[Path, int]:
+    zip_path = unique_path(config.temp_dir, f"common_{stage}_{secrets.token_hex(4)}.zip")
+    files_count = 0
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for account in accounts:
+            added_paths: set[str] = set()
+            folder = f"account_{account.id}"
+            for path in _account_file_paths(account):
+                resolved = str(_resolved_path(path))
+                if resolved in added_paths or not path.exists() or not path.is_file():
+                    continue
+                added_paths.add(resolved)
+                archive.write(path, arcname=f"{folder}/{path.name}")
+                files_count += 1
+    return zip_path, files_count
+
+
 def _normalize_login_code(raw: str) -> str:
     return "".join(ch for ch in raw if ch.isdigit())
 
@@ -304,12 +393,13 @@ async def _show_worker_home_message(message: Message, config: Config, worker) ->
 
 async def _show_account_page(callback: CallbackQuery, config: Config, origin: str, ref_id: int, page: int) -> None:
     worker = None
-    worker_filter: int | None | str = None if origin == "common" else ref_id
-    department_filter: int | None | str = None if origin == "common" else "any"
+    is_common = origin in {"common", "common_nereg", "common_reg"}
+    worker_filter: int | None | str = None if is_common else ref_id
+    department_filter: int | None | str = "any"
     account_stage = None
-    if origin == "worker_nereg":
+    if origin in {"worker_nereg", "common_nereg"}:
         account_stage = "nereg"
-    elif origin == "worker_reg":
+    elif origin in {"worker_reg", "common_reg"}:
         account_stage = "reg"
 
     if origin in {"worker", "worker_nereg", "worker_reg"}:
@@ -342,6 +432,8 @@ async def _show_account_page(callback: CallbackQuery, config: Config, origin: st
         elif origin == "worker_reg":
             section = "\nРаздел: РЕГ"
         title = f"Хранилище воркера\n{_worker_name(worker)}{section}"
+    elif origin in {"common_nereg", "common_reg"}:
+        title = f"Общее хранилище\nРаздел: {_stage_title(account_stage or 'nereg')}"
     else:
         title = "Общее хранилище"
 
@@ -526,6 +618,21 @@ async def show_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
 async def show_accounts_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.message.edit_text("Аккаунты", reply_markup=accounts_menu())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "accounts:common_sections")
+async def show_common_account_sections(callback: CallbackQuery, config: Config) -> None:
+    nereg_count, reg_count = _common_account_counts(config)
+    text = (
+        "Общее хранилище\n\n"
+        f"НЕРЕГ: {nereg_count}\n"
+        f"РЕГ: {reg_count}"
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=common_storage_sections_menu(nereg_count=nereg_count, reg_count=reg_count),
+    )
     await callback.answer()
 
 
@@ -1180,7 +1287,7 @@ async def show_account_detail_message(message: Message, config: Config) -> None:
     if account.worker_id:
         origin = "worker_reg" if account.account_stage == "reg" else "worker_nereg"
     else:
-        origin = "common"
+        origin = "common_reg" if account.account_stage == "reg" else "common_nereg"
     ref_id = account.worker_id or 0
     await message.answer(
         _account_detail_text(account, config),
@@ -1203,6 +1310,247 @@ async def download_account_file(callback: CallbackQuery, config: Config) -> None
 
     await callback.message.answer_document(FSInputFile(path))
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("accounts:zip_common:"))
+async def download_common_stage_zip(callback: CallbackQuery, config: Config) -> None:
+    stage = callback.data.rsplit(":", 1)[-1]
+    if stage not in {"nereg", "reg"}:
+        await callback.answer("Неизвестный раздел.", show_alert=True)
+        return
+    accounts = list_accounts_by_scope(config, worker_id=None, account_stage=stage)
+    if not accounts:
+        await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
+        return
+    zip_path, files_count = _make_accounts_zip(config, accounts, stage)
+    if files_count == 0:
+        try:
+            zip_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        await callback.answer("Файлы для архива не найдены.", show_alert=True)
+        return
+    await callback.message.answer_document(
+        FSInputFile(zip_path),
+        caption=f"Общее хранилище {_stage_title(stage)}: {len(accounts)} аккаунтов, {files_count} файлов.",
+    )
+    try:
+        zip_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    await callback.answer("ZIP сформирован.")
+
+
+@router.callback_query(F.data.startswith("account:return_common:"))
+async def return_account_common_start(callback: CallbackQuery, config: Config) -> None:
+    _, _, raw_account_id, origin, raw_ref, raw_page = callback.data.split(":", 5)
+    account = get_account(config, int(raw_account_id))
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    if not account.worker_id:
+        await callback.answer("Аккаунт уже в общем хранилище.", show_alert=True)
+        return
+    prefix = f"account:return_common_to:{account.id}:{origin}:{raw_ref}:{raw_page}"
+    cancel = f"account:open:{account.id}:{origin}:{raw_ref}:{raw_page}"
+    await callback.message.edit_text(
+        "Куда вернуть аккаунт в общем хранилище?",
+        reply_markup=common_target_stage_menu(prefix, cancel),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("account:return_common_to:"))
+async def return_account_common_finish(callback: CallbackQuery, config: Config) -> None:
+    _, _, raw_account_id, _origin, _raw_ref, _raw_page, target_stage = callback.data.split(":", 6)
+    if target_stage not in {"nereg", "reg"}:
+        await callback.answer("Неизвестный раздел.", show_alert=True)
+        return
+    account_id = int(raw_account_id)
+    account = get_account(config, account_id)
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    set_account_worker_and_stage(config, account_id, None, target_stage)
+    account = get_account(config, account_id)
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    new_origin = f"common_{target_stage}"
+    await callback.message.edit_text(
+        _account_detail_text(account, config),
+        reply_markup=account_detail_menu(
+            account.id,
+            account_stage=account.account_stage,
+            origin=new_origin,
+            ref_id=0,
+            page=0,
+        ),
+    )
+    await callback.answer(f"Аккаунт возвращен в общий {_stage_title(target_stage)}.")
+
+
+@router.callback_query(F.data.startswith("account:delete_ask:"))
+async def ask_delete_account(callback: CallbackQuery, config: Config) -> None:
+    _, _, raw_account_id, origin, raw_ref, raw_page = callback.data.split(":", 5)
+    account = get_account(config, int(raw_account_id))
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    if account.worker_id is not None:
+        await callback.answer("Удалять можно только из общего хранилища.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "ВЫ УВЕРЕНЫ ЧТО ХОТИТЕ УДАЛИТЬ АККАУНТ И ЕГО ФАЙЛЫ С СЕРВЕРА?",
+        reply_markup=confirm_delete_account_menu(account.id, origin, int(raw_ref), int(raw_page)),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("account:delete_confirm:"))
+async def confirm_delete_account(callback: CallbackQuery, config: Config) -> None:
+    _, _, raw_account_id, origin, _raw_ref, _raw_page = callback.data.split(":", 5)
+    account = get_account(config, int(raw_account_id))
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    if account.worker_id is not None:
+        await callback.answer("Удалять можно только из общего хранилища.", show_alert=True)
+        return
+    stage = account.account_stage
+    removed_files = _delete_local_account_files(config, [account])
+    delete_account_row(config, account.id)
+    nereg_count, reg_count = _common_account_counts(config)
+    await callback.message.edit_text(
+        (
+            f"Аккаунт #{account.id} удален из бота.\n"
+            f"Файлов удалено с сервера: {removed_files}\n\n"
+            f"Общее хранилище\nНЕРЕГ: {nereg_count}\nРЕГ: {reg_count}"
+        ),
+        reply_markup=common_storage_sections_menu(nereg_count=nereg_count, reg_count=reg_count),
+    )
+    await callback.answer(f"Удалено из {_stage_title(stage)}.")
+
+
+@router.callback_query(F.data.startswith("accounts:delete_common_ask:"))
+async def ask_delete_common_stage(callback: CallbackQuery, config: Config) -> None:
+    stage = callback.data.rsplit(":", 1)[-1]
+    if stage not in {"nereg", "reg"}:
+        await callback.answer("Неизвестный раздел.", show_alert=True)
+        return
+    total = count_accounts_by_stage(config, worker_id=None, account_stage=stage)
+    if not total:
+        await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        f"ВЫ УВЕРЕНЫ ЧТО ХОТИТЕ УДАЛИТЬ ВЕСЬ ОБЩИЙ {_stage_title(stage)}?\nАккаунтов: {total}\nФайлы будут удалены только с сервера.",
+        reply_markup=confirm_delete_common_stage_menu(stage),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("accounts:delete_common_confirm:"))
+async def confirm_delete_common_stage(callback: CallbackQuery, config: Config) -> None:
+    stage = callback.data.rsplit(":", 1)[-1]
+    if stage not in {"nereg", "reg"}:
+        await callback.answer("Неизвестный раздел.", show_alert=True)
+        return
+    accounts = list_accounts_by_scope(config, worker_id=None, account_stage=stage)
+    if not accounts:
+        await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
+        return
+    removed_files = _delete_local_account_files(config, accounts)
+    removed_rows = delete_accounts_by_scope(config, worker_id=None, account_stage=stage)
+    nereg_count, reg_count = _common_account_counts(config)
+    await callback.message.edit_text(
+        (
+            f"Общий {_stage_title(stage)} очищен.\n"
+            f"Аккаунтов удалено из бота: {removed_rows}\n"
+            f"Файлов удалено с сервера: {removed_files}\n\n"
+            f"Общее хранилище\nНЕРЕГ: {nereg_count}\nРЕГ: {reg_count}"
+        ),
+        reply_markup=common_storage_sections_menu(nereg_count=nereg_count, reg_count=reg_count),
+    )
+    await callback.answer("Раздел очищен.")
+
+
+@router.callback_query(F.data.startswith("worker:bulk_return:"))
+async def bulk_return_worker_accounts_start(callback: CallbackQuery, config: Config) -> None:
+    _, _, raw_worker_id, source_stage = callback.data.split(":", 3)
+    if source_stage not in {"nereg", "reg"}:
+        await callback.answer("Неизвестный раздел.", show_alert=True)
+        return
+    worker_id = int(raw_worker_id)
+    worker = get_worker(config, worker_id)
+    if not worker:
+        await callback.answer("Воркер не найден.", show_alert=True)
+        return
+    total = count_accounts_by_stage(config, worker_id=worker_id, account_stage=source_stage)
+    if not total:
+        await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
+        return
+    prefix = f"worker:bulk_return_to:{worker_id}:{source_stage}"
+    cancel = f"accounts:page:worker_{source_stage}:{worker_id}:0"
+    await callback.message.edit_text(
+        f"Куда перенести весь {_stage_title(source_stage)} воркера {_worker_name(worker)}?\nАккаунтов: {total}",
+        reply_markup=common_target_stage_menu(prefix, cancel),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("worker:bulk_return_to:"))
+async def bulk_return_worker_accounts_target(callback: CallbackQuery, config: Config) -> None:
+    _, _, raw_worker_id, source_stage, target_stage = callback.data.split(":", 4)
+    if source_stage not in {"nereg", "reg"} or target_stage not in {"nereg", "reg"}:
+        await callback.answer("Неизвестный раздел.", show_alert=True)
+        return
+    worker_id = int(raw_worker_id)
+    worker = get_worker(config, worker_id)
+    if not worker:
+        await callback.answer("Воркер не найден.", show_alert=True)
+        return
+    total = count_accounts_by_stage(config, worker_id=worker_id, account_stage=source_stage)
+    await callback.message.edit_text(
+        (
+            f"ВЫ УВЕРЕНЫ ЧТО ХОТИТЕ ПЕРЕНЕСТИ ВСЕ АККИ?\n"
+            f"Воркер: {_worker_name(worker)}\n"
+            f"Из: {_stage_title(source_stage)}\n"
+            f"В общее: {_stage_title(target_stage)}\n"
+            f"Аккаунтов: {total}"
+        ),
+        reply_markup=confirm_bulk_return_menu(worker_id, source_stage, target_stage),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("worker:bulk_return_confirm:"))
+async def bulk_return_worker_accounts_confirm(callback: CallbackQuery, config: Config) -> None:
+    _, _, raw_worker_id, source_stage, target_stage = callback.data.split(":", 4)
+    if source_stage not in {"nereg", "reg"} or target_stage not in {"nereg", "reg"}:
+        await callback.answer("Неизвестный раздел.", show_alert=True)
+        return
+    worker_id = int(raw_worker_id)
+    worker = get_worker(config, worker_id)
+    if not worker:
+        await callback.answer("Воркер не найден.", show_alert=True)
+        return
+    moved = move_accounts_to_common_by_scope(
+        config,
+        worker_id=worker_id,
+        source_stage=source_stage,
+        target_stage=target_stage,
+    )
+    _, nereg_count, reg_count = _worker_account_counts(config, worker)
+    await callback.message.edit_text(
+        (
+            f"Перенесено в общее {_stage_title(target_stage)}: {moved}\n\n"
+            f"Хранилище воркера\n{_worker_name(worker)}\n\n"
+            f"НЕРЕГ: {nereg_count}\n"
+            f"РЕГ: {reg_count}"
+        ),
+        reply_markup=worker_account_sections_menu(worker_id, nereg_count=nereg_count, reg_count=reg_count),
+    )
+    await callback.answer("Массовый перенос выполнен.")
 
 
 @router.callback_query(F.data.startswith("account:assign:"))
@@ -1233,6 +1581,15 @@ async def assign_account_finish(callback: CallbackQuery, config: Config) -> None
     worker_id = int(raw_worker_id)
     if worker_id and not worker_exists(config, worker_id):
         await callback.answer("Воркер не найден.", show_alert=True)
+        return
+    if worker_id == 0:
+        prefix = f"account:return_common_to:{account_id}:{origin}:{raw_ref}:{raw_page}"
+        cancel = f"account:open:{account_id}:{origin}:{raw_ref}:{raw_page}"
+        await callback.message.edit_text(
+            "Куда вернуть аккаунт в общем хранилище?",
+            reply_markup=common_target_stage_menu(prefix, cancel),
+        )
+        await callback.answer()
         return
     assign_account_to_worker(config, account_id, None if worker_id == 0 else worker_id)
     account = get_account(config, account_id)
@@ -1323,6 +1680,9 @@ async def confirm_account_stage(callback: CallbackQuery, config: Config) -> None
     if account.worker_id:
         new_origin = "worker_reg" if account.account_stage == "reg" else "worker_nereg"
         new_ref_id = account.worker_id
+    elif origin in {"common", "common_nereg", "common_reg"}:
+        new_origin = "common_reg" if account.account_stage == "reg" else "common_nereg"
+        new_ref_id = 0
     else:
         new_origin = origin
         new_ref_id = int(raw_ref)

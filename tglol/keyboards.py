@@ -23,7 +23,7 @@ def main_menu() -> InlineKeyboardMarkup:
 def accounts_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Добавить аккаунт", callback_data="accounts:add")
-    builder.button(text="Общее хранилище", callback_data="accounts:page:common:0:0")
+    builder.button(text="Общее хранилище", callback_data="accounts:common_sections")
     builder.button(text="Хранилища воркеров", callback_data="accounts:worker_storage")
     builder.button(text="Назад", callback_data="main:menu")
     builder.adjust(1)
@@ -113,10 +113,19 @@ def accounts_page_keyboard(
     if page + 1 < pages:
         builder.button(text="Вперед ›", callback_data=f"accounts:page:{origin}:{ref_id}:{next_page}")
 
+    if origin in {"common_nereg", "common_reg"} and total > 0:
+        stage = "nereg" if origin == "common_nereg" else "reg"
+        builder.button(text="Скачать ZIP", callback_data=f"accounts:zip_common:{stage}")
+        builder.button(text="Удалить весь раздел", callback_data=f"accounts:delete_common_ask:{stage}")
+
     if origin == "worker":
         builder.button(text="К воркерам", callback_data="accounts:worker_storage")
     elif origin in {"worker_nereg", "worker_reg"}:
+        stage = "nereg" if origin == "worker_nereg" else "reg"
+        builder.button(text="Массово вернуть в общее", callback_data=f"worker:bulk_return:{ref_id}:{stage}")
         builder.button(text="К разделам воркера", callback_data=f"worker:account_sections:{ref_id}")
+    elif origin in {"common_nereg", "common_reg"}:
+        builder.button(text="К разделам общего", callback_data="accounts:common_sections")
     builder.button(text="Меню аккаунтов", callback_data="accounts:menu")
     builder.adjust(*([1] * len(accounts)), 3, 1, 1)
     return builder.as_markup()
@@ -136,6 +145,8 @@ def account_detail_menu(
     builder.button(text="Скачать session", callback_data=f"accounts:file:session:{account_id}")
     builder.button(text="Скачать JSON", callback_data=f"accounts:file:json:{account_id}")
     builder.button(text="Выдать воркеру", callback_data=f"account:assign:{account_id}:{origin}:{ref_id}:{page}")
+    if origin in {"worker", "worker_nereg", "worker_reg"}:
+        builder.button(text="Вернуть в общее", callback_data=f"account:return_common:{account_id}:{origin}:{ref_id}:{page}")
     if account_stage == "reg":
         builder.button(
             text="Перенести в НЕРЕГ",
@@ -146,7 +157,54 @@ def account_detail_menu(
             text="Пометить зареганным",
             callback_data=f"account:stage_ask1:{account_id}:reg:{origin}:{ref_id}:{page}",
         )
+    if origin in {"common", "common_nereg", "common_reg"}:
+        builder.button(text="Удалить аккаунт", callback_data=f"account:delete_ask:{account_id}:{origin}:{ref_id}:{page}")
     builder.button(text="Назад", callback_data=back)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def common_storage_sections_menu(*, nereg_count: int, reg_count: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"НЕРЕГ | {nereg_count}", callback_data="accounts:page:common_nereg:0:0")
+    builder.button(text=f"РЕГ | {reg_count}", callback_data="accounts:page:common_reg:0:0")
+    builder.button(text="Назад", callback_data="accounts:menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def common_target_stage_menu(callback_prefix: str, cancel_callback: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="В общий НЕРЕГ", callback_data=f"{callback_prefix}:nereg")
+    builder.button(text="В общий РЕГ", callback_data=f"{callback_prefix}:reg")
+    builder.button(text="Отмена", callback_data=cancel_callback)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def confirm_delete_account_menu(account_id: int, origin: str, ref_id: int, page: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="ДА, УДАЛИТЬ", callback_data=f"account:delete_confirm:{account_id}:{origin}:{ref_id}:{page}")
+    builder.button(text="Отмена", callback_data=f"account:open:{account_id}:{origin}:{ref_id}:{page}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def confirm_delete_common_stage_menu(stage: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="ДА, УДАЛИТЬ ВСЕ", callback_data=f"accounts:delete_common_confirm:{stage}")
+    builder.button(text="Отмена", callback_data=f"accounts:page:common_{stage}:0:0")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def confirm_bulk_return_menu(worker_id: int, source_stage: str, target_stage: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="ДА, ПЕРЕНЕСТИ ВСЕ",
+        callback_data=f"worker:bulk_return_confirm:{worker_id}:{source_stage}:{target_stage}",
+    )
+    builder.button(text="Отмена", callback_data=f"accounts:page:worker_{source_stage}:{worker_id}:0")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -230,6 +288,10 @@ def worker_account_sections_menu(worker_id: int, *, nereg_count: int, reg_count:
     builder = InlineKeyboardBuilder()
     builder.button(text=f"НЕРЕГ | {nereg_count}", callback_data=f"accounts:page:worker_nereg:{worker_id}:0")
     builder.button(text=f"РЕГ | {reg_count}", callback_data=f"accounts:page:worker_reg:{worker_id}:0")
+    if nereg_count:
+        builder.button(text="Весь НЕРЕГ в общее", callback_data=f"worker:bulk_return:{worker_id}:nereg")
+    if reg_count:
+        builder.button(text="Весь РЕГ в общее", callback_data=f"worker:bulk_return:{worker_id}:reg")
     builder.button(text="Назад к воркерам", callback_data="accounts:worker_storage")
     builder.adjust(1)
     return builder.as_markup()
