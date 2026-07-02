@@ -903,16 +903,16 @@ async def get_worker_self_account_code(callback: CallbackQuery, config: Config, 
         api_id, api_hash, runtime = _account_connection_params(account, config)
         code = await get_latest_telegram_code(session_path, api_id, api_hash, runtime)
     except Exception as exc:
-        await callback.message.answer(f"Не удалось получить verification code: {exc}")
+        await callback.message.answer(f"Не удалось получить код из Verification Codes: {exc}")
         await callback.answer()
         return
 
     if not code:
-        await callback.message.answer("Verification code не найден в последних сообщениях Telegram.")
+        await callback.message.answer("Код не найден в последних сообщениях @VerificationCodes.")
         await callback.answer()
         return
 
-    await callback.message.answer(f"Verification code: <code>{code}</code>")
+    await callback.message.answer(f"Код из Verification Codes: <code>{code}</code>")
     await callback.answer("Код найден.")
 
 

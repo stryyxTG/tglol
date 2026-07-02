@@ -310,7 +310,7 @@ def worker_self_accounts_page_keyboard(
 
 def worker_self_account_detail_menu(account_id: int, *, stage: str, page: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="Получить verification code", callback_data=f"worker:self_code:{account_id}")
+    builder.button(text="Получить код из Verification Codes", callback_data=f"worker:self_code:{account_id}")
     builder.button(text="Назад", callback_data=f"worker:self:page:{stage}:{page}")
     builder.adjust(1)
     return builder.as_markup()

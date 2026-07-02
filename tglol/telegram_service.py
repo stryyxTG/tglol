@@ -11,7 +11,8 @@ from telethon.errors import SessionPasswordNeededError
 from telethon.tl.types import User
 
 
-CODE_RE = re.compile(r"\b\d{5,6}\b")
+CODE_RE = re.compile(r"(?<!\d)(\d[\d\s-]{2,14}\d)(?!\d)")
+VERIFICATION_CODE_PEERS = ("VerificationCodes", "@VerificationCodes")
 logger = logging.getLogger(__name__)
 
 
@@ -182,14 +183,17 @@ async def get_latest_telegram_code(
         if not await client.is_user_authorized():
             raise RuntimeError("session is not authorized")
 
-        for peer in (777000, "Telegram"):
+        for peer in VERIFICATION_CODE_PEERS:
             try:
                 async for message in client.iter_messages(peer, limit=limit):
                     text = message.message or ""
                     match = CODE_RE.search(text)
                     if match:
-                        return match.group(0)
-            except Exception:
+                        code = re.sub(r"\D+", "", match.group(1))
+                        if 4 <= len(code) <= 8:
+                            return code
+            except Exception as exc:
+                logger.info("Cannot read verification codes from peer %s: %s", peer, exc)
                 continue
         return None
     finally:
