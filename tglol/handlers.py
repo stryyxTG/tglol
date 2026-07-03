@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import time
 import zipfile
 
 from aiogram import BaseMiddleware, Bot, F, Router
@@ -1021,14 +1022,36 @@ async def add_zip_file(message: Message, bot: Bot, state: FSMContext, config: Co
 
     zip_path = unique_path(config.temp_dir, filename)
     await download_document(bot, message.document, zip_path)
+    progress_message = await message.answer("ZIP получен. Начинаю импорт...")
+    last_progress_update = 0.0
+
+    async def update_zip_progress(done: int, total: int, current: str) -> None:
+        nonlocal last_progress_update
+        now = time.monotonic()
+        if done not in {0, total} and done % 5 != 0 and now - last_progress_update < 3:
+            return
+        last_progress_update = now
+        current_line = f"\nСейчас: {current}" if current else ""
+        try:
+            await progress_message.edit_text(
+                f"Импорт ZIP...\nГотово: {done}/{total}{current_line}"
+            )
+        except Exception:
+            pass
+
     try:
         results, summary = await import_zip(
             config,
             zip_path=zip_path,
             created_by=message.from_user.id if message.from_user else None,
+            progress=update_zip_progress,
         )
     except Exception as exc:
         await state.clear()
+        try:
+            await progress_message.edit_text(f"Импорт ZIP не удался: {exc}")
+        except Exception:
+            pass
         await message.answer(
             f"Импорт ZIP не удался: {exc}",
             reply_markup=add_account_target_menu(list_workers(config)),
@@ -1050,6 +1073,10 @@ async def add_zip_file(message: Message, bot: Bot, state: FSMContext, config: Co
     if len(results) > 20:
         lines.append(f"...и еще {len(results) - 20}")
     await state.clear()
+    try:
+        await progress_message.edit_text("Импорт ZIP завершён.")
+    except Exception:
+        pass
     await message.answer("\n".join(lines), reply_markup=accounts_menu())
 
 

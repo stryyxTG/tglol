@@ -43,6 +43,10 @@ def client_for(
         app_version=runtime.get("app_version") or "6.9.3 x64",
         lang_code=runtime.get("lang_code") or "en",
         system_lang_code=runtime.get("system_lang_code") or "en-US",
+        connection_retries=2,
+        request_retries=2,
+        retry_delay=1,
+        timeout=10,
     )
 
 

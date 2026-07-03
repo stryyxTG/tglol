@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
@@ -14,6 +16,10 @@ from tglol.desktop_profile import generated_account_json, random_desktop_runtime
 from tglol.json_utils import json_identity, load_json, pick_api, pick_twofa, runtime_from_json, write_json
 from tglol.paths import safe_filename, unique_path
 from tglol.telegram_service import inspect_session, user_fields
+
+
+SESSION_IMPORT_TIMEOUT = 35
+ZipProgress = Callable[[int, int, str], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -197,6 +203,7 @@ async def import_zip(
     *,
     zip_path: Path,
     created_by: int | None,
+    progress: ZipProgress | None = None,
 ) -> tuple[list[ImportResult], str]:
     batch_dir = unique_path(config.temp_dir, zip_path.stem)
     batch_dir.mkdir(parents=True, exist_ok=True)
@@ -207,6 +214,9 @@ async def import_zip(
     matches = match_zip_files(session_files, json_files)
 
     results: list[ImportResult] = []
+    total = len(matches)
+    if progress:
+        await progress(0, total, "старт")
     for session_tmp, json_tmp in matches.items():
         try:
             final_session = unique_path(config.sessions_dir, session_tmp.name)
@@ -215,12 +225,24 @@ async def import_zip(
             if json_tmp:
                 final_json = unique_path(config.json_dir, json_tmp.name)
                 shutil.copy2(json_tmp, final_json)
-            result = await import_session_account(
-                config,
-                session_path=final_session,
-                json_path=final_json,
-                source_type="zip",
-                created_by=created_by,
+            result = await asyncio.wait_for(
+                import_session_account(
+                    config,
+                    session_path=final_session,
+                    json_path=final_json,
+                    source_type="zip",
+                    created_by=created_by,
+                ),
+                timeout=SESSION_IMPORT_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            result = ImportResult(
+                account_id=0,
+                status="error",
+                phone=None,
+                username=None,
+                source="zip",
+                note=f"{session_tmp.name}: Telegram не ответил за {SESSION_IMPORT_TIMEOUT} сек.",
             )
         except Exception as exc:
             result = ImportResult(
@@ -232,6 +254,9 @@ async def import_zip(
                 note=f"{session_tmp.name}: {exc}",
             )
         results.append(result)
+        if progress:
+            await progress(len(results), total, session_tmp.name)
+        await asyncio.sleep(0)
 
     imported_count = sum(1 for result in results if result.account_id)
     error_count = sum(1 for result in results if result.status == "error")
