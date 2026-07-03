@@ -20,6 +20,7 @@ from tglol.db import (
     add_worker,
     assign_account_to_worker,
     assign_available_proxies_to_worker,
+    assign_common_accounts_to_worker,
     count_available_proxies,
     count_accounts_by_stage,
     count_worker_proxies,
@@ -51,6 +52,8 @@ from tglol.keyboards import (
     add_account_menu,
     add_account_target_menu,
     assign_account_keyboard,
+    bulk_assign_account_amount_keyboard,
+    bulk_assign_account_worker_keyboard,
     common_storage_sections_menu,
     common_target_stage_menu,
     confirm_bulk_return_menu,
@@ -79,7 +82,7 @@ from tglol.keyboards import (
     workers_menu,
 )
 from tglol.paths import unique_path
-from tglol.states import AddByCode, AddBySession, AddByZip, AddProxy, AssignProxy, CreateWorker, RenameWorker
+from tglol.states import AddByCode, AddBySession, AddByZip, AddProxy, AssignAccount, AssignProxy, CreateWorker, RenameWorker
 from tglol.telegram_service import get_latest_telegram_code, send_code, sign_in_code, sign_in_password, user_fields
 
 router = Router()
@@ -1066,7 +1069,8 @@ async def cancel(
 
 
 @router.callback_query(F.data.startswith("accounts:page:"))
-async def show_accounts_page(callback: CallbackQuery, config: Config) -> None:
+async def show_accounts_page(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
+    await state.clear()
     _, _, origin, raw_ref, raw_page = callback.data.split(":", 4)
     await _show_account_page(callback, config, origin, int(raw_ref), int(raw_page))
 
@@ -1587,6 +1591,119 @@ async def bulk_return_worker_accounts_confirm(callback: CallbackQuery, config: C
         reply_markup=worker_account_sections_menu(worker_id, nereg_count=nereg_count, reg_count=reg_count),
     )
     await callback.answer("Массовый перенос выполнен.")
+
+
+@router.callback_query(F.data.startswith("accounts:bulk_assign:"))
+async def bulk_assign_common_accounts_start(callback: CallbackQuery, config: Config) -> None:
+    stage = callback.data.rsplit(":", 1)[-1]
+    if stage not in {"nereg", "reg"}:
+        await callback.answer("Неизвестный раздел.", show_alert=True)
+        return
+    total = count_accounts_by_stage(config, worker_id=None, account_stage=stage)
+    if not total:
+        await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
+        return
+    workers = list_workers(config)
+    if not workers:
+        await callback.answer("Сначала добавь воркера.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        f"Выдача аккаунтов из общего {_stage_title(stage)}\nАккаунтов доступно: {total}\n\nВыбери воркера.",
+        reply_markup=bulk_assign_account_worker_keyboard(workers, stage),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("accounts:bulk_assign_worker:"))
+async def bulk_assign_common_accounts_worker(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
+    _, _, stage, raw_worker_id = callback.data.split(":", 3)
+    if stage not in {"nereg", "reg"}:
+        await callback.answer("Неизвестный раздел.", show_alert=True)
+        return
+    worker_id = int(raw_worker_id)
+    worker = get_worker(config, worker_id)
+    if not worker:
+        await callback.answer("Воркер не найден.", show_alert=True)
+        return
+    total = count_accounts_by_stage(config, worker_id=None, account_stage=stage)
+    if not total:
+        await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
+        return
+    await state.set_state(AssignAccount.waiting_amount)
+    await state.update_data(bulk_account_stage=stage, bulk_account_worker_id=worker_id)
+    await callback.message.edit_text(
+        (
+            f"Воркер: {_worker_name(worker)}\n"
+            f"Раздел: {_stage_title(stage)}\n"
+            f"Доступно аккаунтов: {total}\n\n"
+            "Выбери количество или отправь число."
+        ),
+        reply_markup=bulk_assign_account_amount_keyboard(total, stage),
+    )
+    await callback.answer()
+
+
+async def _assign_common_accounts_amount(
+    state: FSMContext,
+    config: Config,
+    amount: int,
+) -> tuple[str, bool]:
+    data = await state.get_data()
+    stage = data.get("bulk_account_stage")
+    worker_id = int(data.get("bulk_account_worker_id") or 0)
+    if stage not in {"nereg", "reg"}:
+        await state.clear()
+        return "Раздел выдачи потерян. Начни заново.", False
+    worker = get_worker(config, worker_id)
+    if not worker:
+        await state.clear()
+        return "Воркер не найден.", False
+    total = count_accounts_by_stage(config, worker_id=None, account_stage=stage)
+    if amount <= 0:
+        return "Количество должно быть больше нуля.", False
+    if amount > total:
+        return f"В общем {_stage_title(stage)} сейчас только {total}. Отправь число не больше {total}.", False
+    assigned = assign_common_accounts_to_worker(
+        config,
+        worker_id=worker_id,
+        source_stage=stage,
+        amount=amount,
+    )
+    await state.clear()
+    nereg_count, reg_count = _common_account_counts(config)
+    return (
+        f"Выдано аккаунтов: {assigned}\n"
+        f"Воркер: {_worker_name(worker)}\n"
+        f"Раздел: {_stage_title(stage)}\n\n"
+        f"Общее хранилище\nНЕРЕГ: {nereg_count}\nРЕГ: {reg_count}",
+        True,
+    )
+
+
+@router.callback_query(AssignAccount.waiting_amount, F.data.startswith("accounts:bulk_assign_amount:"))
+async def bulk_assign_common_accounts_amount_button(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
+    amount = int(callback.data.rsplit(":", 1)[-1])
+    text, done = await _assign_common_accounts_amount(state, config, amount)
+    nereg_count, reg_count = _common_account_counts(config)
+    await callback.message.edit_text(
+        text,
+        reply_markup=common_storage_sections_menu(nereg_count=nereg_count, reg_count=reg_count) if done else None,
+    )
+    await callback.answer()
+
+
+@router.message(AssignAccount.waiting_amount)
+async def bulk_assign_common_accounts_amount_message(message: Message, state: FSMContext, config: Config) -> None:
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await message.answer("Отправь количество числом.")
+        return
+    text, done = await _assign_common_accounts_amount(state, config, int(raw))
+    nereg_count, reg_count = _common_account_counts(config)
+    await message.answer(
+        text,
+        reply_markup=common_storage_sections_menu(nereg_count=nereg_count, reg_count=reg_count) if done else None,
+    )
 
 
 @router.callback_query(F.data.startswith("account:assign:"))

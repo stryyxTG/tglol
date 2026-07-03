@@ -247,6 +247,42 @@ def move_accounts_to_common_by_scope(
         return int(cursor.rowcount or 0)
 
 
+def assign_common_accounts_to_worker(
+    config: Config,
+    *,
+    worker_id: int,
+    source_stage: str,
+    amount: int,
+) -> int:
+    if source_stage not in {"nereg", "reg"}:
+        raise ValueError("unknown account stage")
+    if amount <= 0:
+        return 0
+    with connect(config) as connection:
+        rows = connection.execute(
+            """
+            SELECT id FROM accounts
+            WHERE worker_id IS NULL AND account_stage = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (source_stage, amount),
+        ).fetchall()
+        ids = [row["id"] for row in rows]
+        if not ids:
+            return 0
+        placeholders = ", ".join("?" for _ in ids)
+        cursor = connection.execute(
+            f"""
+            UPDATE accounts
+            SET worker_id = ?, department_id = NULL, updated_at = datetime('now')
+            WHERE id IN ({placeholders})
+            """,
+            (worker_id, *ids),
+        )
+        return int(cursor.rowcount or 0)
+
+
 def delete_account_row(config: Config, account_id: int) -> None:
     with connect(config) as connection:
         connection.execute("DELETE FROM accounts WHERE id = ?", (account_id,))

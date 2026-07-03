@@ -115,6 +115,7 @@ def accounts_page_keyboard(
 
     if origin in {"common_nereg", "common_reg"} and total > 0:
         stage = "nereg" if origin == "common_nereg" else "reg"
+        builder.button(text="Выдать воркеру", callback_data=f"accounts:bulk_assign:{stage}")
         builder.button(text="Скачать ZIP", callback_data=f"accounts:zip_common:{stage}")
         builder.button(text="Удалить весь раздел", callback_data=f"accounts:delete_common_ask:{stage}")
 
@@ -250,6 +251,26 @@ def assign_account_keyboard(
     )
     builder.button(text="Назад", callback_data=f"account:open:{account_id}:{origin}:{ref_id}:{page}")
     builder.adjust(*([1] * len(workers)), 1, 1)
+    return builder.as_markup()
+
+
+def bulk_assign_account_worker_keyboard(workers: Sequence, stage: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for worker in workers:
+        builder.button(text=worker["name"], callback_data=f"accounts:bulk_assign_worker:{stage}:{worker['id']}")
+    builder.button(text="Отмена", callback_data=f"accounts:page:common_{stage}:0:0")
+    builder.adjust(*([1] * len(workers)), 1)
+    return builder.as_markup()
+
+
+def bulk_assign_account_amount_keyboard(available: int, stage: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for amount in (1, 2, 3, 5, 10):
+        if amount <= available:
+            builder.button(text=str(amount), callback_data=f"accounts:bulk_assign_amount:{amount}")
+    builder.button(text=f"Все {available}", callback_data=f"accounts:bulk_assign_amount:{available}")
+    builder.button(text="Отмена", callback_data=f"accounts:page:common_{stage}:0:0")
+    builder.adjust(3, 2, 1, 1)
     return builder.as_markup()
 
 

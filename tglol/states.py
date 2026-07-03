@@ -31,6 +31,7 @@ class AddProxy(StatesGroup):
 
 class AssignAccount(StatesGroup):
     waiting_worker_id = State()
+    waiting_amount = State()
 
 
 class AssignProxy(StatesGroup):
