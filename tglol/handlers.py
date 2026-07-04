@@ -50,6 +50,7 @@ from tglol.keyboards import (
     account_detail_menu,
     accounts_menu,
     accounts_page_keyboard,
+    admin_reply_menu,
     add_account_menu,
     add_account_target_menu,
     assign_account_keyboard,
@@ -77,6 +78,7 @@ from tglol.keyboards import (
     worker_account_sections_menu,
     worker_detail_menu,
     worker_name_choice_menu,
+    worker_reply_menu,
     worker_self_account_detail_menu,
     worker_self_accounts_page_keyboard,
     worker_self_menu,
@@ -88,6 +90,8 @@ from tglol.states import AddByCode, AddBySession, AddByZip, AddProxy, AssignAcco
 from tglol.telegram_service import get_latest_telegram_code, send_code, sign_in_code, sign_in_password, user_fields
 
 router = Router()
+
+WORKER_CODE_MESSAGES: dict[int, dict[str, object]] = {}
 
 
 class AccessMiddleware(BaseMiddleware):
@@ -108,7 +112,7 @@ class AccessMiddleware(BaseMiddleware):
             data["current_worker"] = worker
             if isinstance(event, Message):
                 text = event.text or ""
-                if text.startswith("/start") or text == "/cancel":
+                if text.startswith("/start") or text in {"/cancel", "Рабочая панель"}:
                     return await handler(event, data)
             elif isinstance(event, CallbackQuery):
                 callback_data = event.data or ""
@@ -158,6 +162,31 @@ def _text(value) -> str:
 
 def _copyable(value) -> str:
     return f"<code>{escape(str(value))}</code>" if value not in (None, "") else "-"
+
+
+async def _clear_worker_code_messages(bot: Bot, chat_id: int) -> None:
+    state = WORKER_CODE_MESSAGES.pop(chat_id, None)
+    if not state:
+        return
+    for message_id in state.get("message_ids", []):
+        try:
+            await bot.delete_message(chat_id, int(message_id))
+        except Exception:
+            pass
+
+
+async def _clear_worker_code_messages_if_account_changed(bot: Bot, chat_id: int, account_id: int) -> None:
+    state = WORKER_CODE_MESSAGES.get(chat_id)
+    if state and state.get("account_id") != account_id:
+        await _clear_worker_code_messages(bot, chat_id)
+
+
+def _remember_worker_code_message(chat_id: int, account_id: int, message: Message) -> None:
+    state = WORKER_CODE_MESSAGES.setdefault(chat_id, {"account_id": account_id, "message_ids": []})
+    state["account_id"] = account_id
+    message_ids = state.setdefault("message_ids", [])
+    if isinstance(message_ids, list):
+        message_ids.append(message.message_id)
 
 
 def _username(value) -> str:
@@ -219,6 +248,18 @@ def _worker_account_counts(config: Config, worker) -> tuple[int, int, int]:
         account_stage="reg",
     )
     return total, nereg_count, reg_count
+
+
+def _worker_detail_text(config: Config, worker) -> str:
+    accounts_total, nereg_count, reg_count = _worker_account_counts(config, worker)
+    return (
+        f"Воркер\n"
+        f"Имя: {escape(worker['name'])}\n"
+        f"Telegram ID: {worker['telegram_id'] or '-'}\n"
+        f"Аккаунтов: {accounts_total}\n"
+        f"НЕРЕГ: {nereg_count}\n"
+        f"РЕГ: {reg_count}"
+    )
 
 
 def _worker_can_access_account(account, worker) -> bool:
@@ -643,7 +684,27 @@ async def start(
 ) -> None:
     await state.clear()
     if is_admin:
+        await message.answer("Кнопка админ-панели включена.", reply_markup=admin_reply_menu())
         await message.answer("Админ-панель", reply_markup=main_menu())
+        return
+    await message.answer("Кнопка рабочей панели включена.", reply_markup=worker_reply_menu())
+    await _show_worker_home_message(message, config, current_worker)
+
+
+@router.message(F.text == "Админ панель")
+async def admin_panel_button(message: Message, state: FSMContext, is_admin: bool) -> None:
+    await state.clear()
+    if not is_admin:
+        await message.answer("Нет доступа.")
+        return
+    await message.answer("Админ-панель", reply_markup=main_menu())
+
+
+@router.message(F.text == "Рабочая панель")
+async def worker_panel_button(message: Message, state: FSMContext, config: Config, current_worker) -> None:
+    await state.clear()
+    if not current_worker:
+        await message.answer("Нет доступа.")
         return
     await _show_worker_home_message(message, config, current_worker)
 
@@ -1173,12 +1234,13 @@ async def show_worker_self_accounts(callback: CallbackQuery, config: Config, cur
 
 
 @router.callback_query(F.data.startswith("worker:self_account:"))
-async def show_worker_self_account(callback: CallbackQuery, config: Config, current_worker) -> None:
+async def show_worker_self_account(callback: CallbackQuery, bot: Bot, config: Config, current_worker) -> None:
     _, _, raw_account_id, stage, raw_page = callback.data.split(":", 4)
     account = get_account(config, int(raw_account_id))
     if not account or not _worker_can_access_account(account, current_worker):
         await callback.answer("Аккаунт недоступен.", show_alert=True)
         return
+    await _clear_worker_code_messages_if_account_changed(bot, callback.message.chat.id, account.id)
     await callback.message.edit_text(
         _worker_account_detail_text(account),
         reply_markup=worker_self_account_detail_menu(
@@ -1271,12 +1333,13 @@ async def send_worker_account_phone(callback: CallbackQuery, config: Config, cur
 
 
 @router.callback_query(F.data.startswith("worker:self_code:"))
-async def get_worker_self_account_code(callback: CallbackQuery, config: Config, current_worker) -> None:
+async def get_worker_self_account_code(callback: CallbackQuery, bot: Bot, config: Config, current_worker) -> None:
     raw_account_id = callback.data.rsplit(":", 1)[-1]
     account = get_account(config, int(raw_account_id))
     if not account or not _worker_can_access_account(account, current_worker):
         await callback.answer("Аккаунт недоступен.", show_alert=True)
         return
+    await _clear_worker_code_messages(bot, callback.message.chat.id)
 
     session_path = Path(account.session_path)
     if not session_path.exists():
@@ -1287,16 +1350,19 @@ async def get_worker_self_account_code(callback: CallbackQuery, config: Config, 
         api_id, api_hash, runtime = _account_connection_params(account, config)
         code = await get_latest_telegram_code(session_path, api_id, api_hash, runtime)
     except Exception as exc:
-        await callback.message.answer(f"Не удалось получить код из Verification Codes: {exc}")
+        sent = await callback.message.answer(f"Не удалось получить код из Verification Codes: {exc}")
+        _remember_worker_code_message(callback.message.chat.id, account.id, sent)
         await callback.answer()
         return
 
     if not code:
-        await callback.message.answer("Код не найден в последних сообщениях @VerificationCodes.")
+        sent = await callback.message.answer("Код не найден в последних сообщениях @VerificationCodes.")
+        _remember_worker_code_message(callback.message.chat.id, account.id, sent)
         await callback.answer()
         return
 
-    await callback.message.answer(f"Код из Verification Codes: <code>{code}</code>")
+    sent = await callback.message.answer(f"Код из Verification Codes: <code>{code}</code>")
+    _remember_worker_code_message(callback.message.chat.id, account.id, sent)
     await callback.answer("Код найден.")
 
 
@@ -2054,16 +2120,7 @@ async def open_worker(callback: CallbackQuery, config: Config) -> None:
     if not worker:
         await callback.answer("Воркер не найден.", show_alert=True)
         return
-    accounts_total, nereg_count, reg_count = _worker_account_counts(config, worker)
-    text = (
-        f"Воркер\n"
-        f"Имя: {worker['name']}\n"
-        f"Telegram ID: {worker['telegram_id'] or '-'}\n"
-        f"Аккаунтов: {accounts_total}\n"
-        f"НЕРЕГ: {nereg_count}\n"
-        f"РЕГ: {reg_count}"
-    )
-    await callback.message.edit_text(text, reply_markup=worker_detail_menu(worker_id))
+    await callback.message.edit_text(_worker_detail_text(config, worker), reply_markup=worker_detail_menu(worker_id))
     await callback.answer()
 
 
@@ -2101,6 +2158,30 @@ async def rename_worker_finish(message: Message, state: FSMContext, config: Conf
         f"Воркер переименован: <b>{escape(name)}</b>",
         reply_markup=workers_menu(list_workers(config)),
     )
+
+
+@router.callback_query(F.data.startswith("worker:refresh_name:"))
+async def refresh_worker_name(callback: CallbackQuery, bot: Bot, config: Config) -> None:
+    worker_id = int(callback.data.rsplit(":", 1)[-1])
+    worker = get_worker(config, worker_id)
+    if not worker:
+        await callback.answer("Воркер не найден.", show_alert=True)
+        return
+    telegram_id = worker["telegram_id"]
+    if not telegram_id:
+        await callback.answer("У воркера нет Telegram ID.", show_alert=True)
+        return
+    name = await _fetch_worker_telegram_name(bot, int(telegram_id))
+    if not name:
+        await callback.answer(
+            "Не удалось подтянуть имя. Пусть воркер напишет /start боту или задай имя вручную.",
+            show_alert=True,
+        )
+        return
+    update_worker_name(config, worker_id, name)
+    worker = get_worker(config, worker_id)
+    await callback.message.edit_text(_worker_detail_text(config, worker), reply_markup=worker_detail_menu(worker_id))
+    await callback.answer("Имя обновлено из Telegram.")
 
 
 @router.callback_query(F.data.startswith("worker:delete:ask:"))

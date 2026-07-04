@@ -3,11 +3,27 @@ from __future__ import annotations
 from collections.abc import Sequence
 from math import ceil
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
 ACCOUNTS_PER_PAGE = 14
+
+
+def admin_reply_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Админ панель")]],
+        resize_keyboard=True,
+        input_field_placeholder="Админ панель",
+    )
+
+
+def worker_reply_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Рабочая панель")]],
+        resize_keyboard=True,
+        input_field_placeholder="Рабочая панель",
+    )
 
 
 def main_menu() -> InlineKeyboardMarkup:
@@ -320,7 +336,8 @@ def workers_menu(workers: Sequence) -> InlineKeyboardMarkup:
 def worker_detail_menu(worker_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Аккаунты воркера", callback_data=f"worker:account_sections:{worker_id}")
-    builder.button(text="Переименовать", callback_data=f"worker:rename:{worker_id}")
+    builder.button(text="Задать имя вручную", callback_data=f"worker:rename:{worker_id}")
+    builder.button(text="Обновить имя из Telegram", callback_data=f"worker:refresh_name:{worker_id}")
     builder.button(text="Удалить воркера", callback_data=f"worker:delete:ask:{worker_id}")
     builder.button(text="Назад", callback_data="workers:menu")
     builder.adjust(1)
