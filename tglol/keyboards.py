@@ -418,10 +418,10 @@ def worker_proxy_menu(*, remaining: int, total: int) -> InlineKeyboardMarkup:
 
 def worker_self_menu(*, nereg_count: int, reg_count: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"НЕРЕГ | {nereg_count}", callback_data="worker:self:page:nereg:0")
-    builder.button(text=f"РЕГ | {reg_count}", callback_data="worker:self:page:reg:0")
-    builder.button(text="Прокси", callback_data="worker:self_proxy:menu")
-    builder.button(text="Обновить", callback_data="worker:self:menu")
+    builder.button(text=f"❌ НЕРЕГ| {nereg_count}", callback_data="worker:self:page:nereg:0")
+    builder.button(text=f"✅ РЕГ | {reg_count}", callback_data="worker:self:page:reg:0")
+    builder.button(text="🌐ПРОКСИ", callback_data="worker:self_proxy:menu")
+    builder.button(text="🆕ОБНОВИТЬ", callback_data="worker:self:menu")
     builder.adjust(1)
     return builder.as_markup()
 

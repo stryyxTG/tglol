@@ -403,14 +403,9 @@ async def _show_worker_home_callback(
     answer_text: str | None = None,
 ) -> None:
     nereg_count, reg_count = _worker_counts(config, worker)
-    proxy_remaining = count_worker_proxies(config, worker["id"], "assigned")
-    proxy_total = count_worker_proxies(config, worker["id"])
     text = (
-        f"Рабочая панель\n"
-        f"Воркер: {_worker_name(worker)}\n\n"
-        f"НЕРЕГ: {nereg_count}\n"
-        f"РЕГ: {reg_count}\n"
-        f"Прокси: {proxy_remaining}/{proxy_total}"
+        f"📲Рабочая панель\n"
+        f"🧑🏻‍💻Воркер : {escape(_worker_name(worker))}"
     )
     await callback.message.edit_text(
         text,
@@ -424,14 +419,9 @@ async def _show_worker_home_callback(
 
 async def _show_worker_home_message(message: Message, config: Config, worker) -> None:
     nereg_count, reg_count = _worker_counts(config, worker)
-    proxy_remaining = count_worker_proxies(config, worker["id"], "assigned")
-    proxy_total = count_worker_proxies(config, worker["id"])
     text = (
-        f"Рабочая панель\n"
-        f"Воркер: {_worker_name(worker)}\n\n"
-        f"НЕРЕГ: {nereg_count}\n"
-        f"РЕГ: {reg_count}\n"
-        f"Прокси: {proxy_remaining}/{proxy_total}"
+        f"📲Рабочая панель\n"
+        f"🧑🏻‍💻Воркер : {escape(_worker_name(worker))}"
     )
     await message.answer(
         text,
