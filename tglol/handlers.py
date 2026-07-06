@@ -152,8 +152,18 @@ def _pages(total: int) -> int:
     return max(1, ceil(total / ACCOUNTS_PER_PAGE))
 
 
+def _format_phone(value) -> str | None:
+    if value in (None, ""):
+        return None
+    phone = str(value).strip()
+    digits = re.sub(r"\D+", "", phone)
+    if len(digits) == 11 and digits.startswith("7"):
+        return f"{digits[0]} {digits[1:4]} {digits[4:7]} {digits[7:]}"
+    return phone
+
+
 def _account_name(account) -> str:
-    return str(account.phone or account.username or account.telegram_user_id or "без данных")
+    return str(_format_phone(account.phone) or account.username or account.telegram_user_id or "без данных")
 
 
 def _text(value) -> str:
@@ -543,7 +553,7 @@ def _account_detail_text(account, config: Config) -> str:
     return (
         f"<b>Аккаунт #{account.id}</b> · {stage}\n"
         f"Статус: <code>{_text(account.status)}</code>\n\n"
-        f"Телефон:\n{_copyable(account.phone)}\n\n"
+        f"Телефон:\n{_copyable(_format_phone(account.phone))}\n\n"
         f"Username: {_username(account.username)}\n"
         f"User ID: {_copyable(account.telegram_user_id)}\n\n"
         f"JSON: {_text(account.json_source)}\n"
@@ -557,7 +567,7 @@ def _worker_account_detail_text(account) -> str:
     return (
         f"<b>Аккаунт #{account.id}</b> · {stage}\n"
         f"Статус: <code>{_text(account.status)}</code>\n\n"
-        f"Телефон:\n{_copyable(account.phone)}\n\n"
+        f"Телефон:\n{_copyable(_format_phone(account.phone))}\n\n"
         f"Username: {_username(account.username)}"
     )
 
@@ -1328,7 +1338,7 @@ async def send_worker_account_phone(callback: CallbackQuery, config: Config, cur
     if not account.phone:
         await callback.answer("Номер не указан.", show_alert=True)
         return
-    await callback.message.answer(_copyable(account.phone))
+    await callback.message.answer(_copyable(_format_phone(account.phone)))
     await callback.answer("Номер отправлен.")
 
 
@@ -1376,8 +1386,45 @@ async def send_account_phone(callback: CallbackQuery, config: Config) -> None:
     if not account.phone:
         await callback.answer("Номер не указан.", show_alert=True)
         return
-    await callback.message.answer(_copyable(account.phone))
+    await callback.message.answer(_copyable(_format_phone(account.phone)))
     await callback.answer("Номер отправлен.")
+
+
+@router.callback_query(F.data.startswith("account:code:"))
+async def get_account_verification_code(callback: CallbackQuery, config: Config) -> None:
+    parts = callback.data.split(":")
+    if len(parts) < 2:
+        await callback.answer("Неверный запрос.", show_alert=True)
+        return
+    account_id = int(parts[2]) if len(parts) > 2 else int(parts[1])
+    account = get_account(config, account_id)
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    if not account.phone:
+        await callback.answer("Номер не указан.", show_alert=True)
+        return
+
+    session_path = Path(account.session_path)
+    if not session_path.exists():
+        await callback.answer("Session файл не найден.", show_alert=True)
+        return
+
+    try:
+        api_id, api_hash, runtime = _account_connection_params(account, config)
+        code = await get_latest_telegram_code(session_path, api_id, api_hash, runtime)
+    except Exception as exc:
+        await callback.message.answer(f"Не удалось получить код из Verification Codes: {exc}")
+        await callback.answer()
+        return
+
+    if not code:
+        await callback.message.answer("Код не найден в последних сообщениях @VerificationCodes.")
+        await callback.answer()
+        return
+
+    await callback.message.answer(f"Код из Verification Codes: <code>{code}</code>")
+    await callback.answer("Код найден.")
 
 
 @router.callback_query(F.data.startswith("account:open:"))

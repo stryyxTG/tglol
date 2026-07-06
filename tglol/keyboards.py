@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from math import ceil
 
@@ -99,8 +100,18 @@ def skip_json_menu() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def _format_phone(value) -> str | None:
+    if value in (None, ""):
+        return None
+    phone = str(value).strip()
+    digits = re.sub(r"\D+", "", phone)
+    if len(digits) == 11 and digits.startswith("7"):
+        return f"{digits[0]} {digits[1:4]} {digits[4:7]} {digits[7:]}"
+    return phone
+
+
 def _account_label(account) -> str:
-    name = account.phone or account.username or account.telegram_user_id or "без данных"
+    name = _format_phone(account.phone) or account.username or account.telegram_user_id or "без данных"
     stage = "РЕГ" if account.account_stage == "reg" else "НЕРЕГ"
     return f"#{account.id} | {name} | {stage} | {account.status}"
 
@@ -172,6 +183,7 @@ def account_detail_menu(
     back = f"accounts:page:{origin}:{ref_id}:{page}"
     builder = InlineKeyboardBuilder()
     builder.button(text="Скопировать номер", callback_data=f"accounts:phone:{account_id}")
+    builder.button(text="Получить код из Verification Codes", callback_data=f"account:code:{account_id}")
     builder.button(text="Скачать session", callback_data=f"accounts:file:session:{account_id}")
     builder.button(text="Скачать JSON", callback_data=f"accounts:file:json:{account_id}")
     builder.button(text="Выдать воркеру", callback_data=f"account:assign:{account_id}:{origin}:{ref_id}:{page}")
