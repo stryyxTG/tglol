@@ -2276,7 +2276,7 @@ async def open_proxy(callback: CallbackQuery, config: Config) -> None:
         await callback.answer("Прокси уже выдан или не найден.", show_alert=True)
         return
     await callback.message.edit_text(
-        f"Прокси #{proxy['id']}\n\n<code>{escape(proxy['proxy'])}</code>",
+        f"Прокси #{proxy['id']}\n\n<b>{escape(proxy['proxy'])}</b>",
         reply_markup=proxy_detail_keyboard(proxy_id),
     )
     await callback.answer()
@@ -2429,7 +2429,7 @@ async def worker_get_proxy(callback: CallbackQuery, config: Config, current_work
     remaining = count_worker_proxies(config, worker_id, "assigned")
     total = before_total
     await callback.message.answer(
-        f"Прокси:\n<code>{escape(proxy['proxy'])}</code>\n\nОсталось: {remaining}/{total}"
+        f"Прокси:\n<b>{escape(proxy['proxy'])}</b>\n\nОсталось: {remaining}/{total}"
     )
     await callback.message.edit_text(
         f"Прокси\n\nДоступно: {remaining}/{total}",
