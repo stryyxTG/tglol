@@ -224,6 +224,17 @@ def common_target_stage_menu(callback_prefix: str, cancel_callback: str) -> Inli
     return builder.as_markup()
 
 
+def download_zip_amount_keyboard(total: int, stage: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for amount in (1, 5, 10, 20, 50):
+        if amount <= total:
+            builder.button(text=str(amount), callback_data=f"accounts:zip_amount:{stage}:{amount}")
+    builder.button(text=f"Все {total}", callback_data=f"accounts:zip_amount:{stage}:all")
+    builder.button(text="Отмена", callback_data=f"accounts:page:common_{stage}:0:0")
+    builder.adjust(3, 2, 1, 1)
+    return builder.as_markup()
+
+
 def confirm_delete_account_menu(account_id: int, origin: str, ref_id: int, page: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="ДА, УДАЛИТЬ", callback_data=f"account:delete_confirm:{account_id}:{origin}:{ref_id}:{page}")

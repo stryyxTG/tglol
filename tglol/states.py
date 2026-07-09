@@ -34,6 +34,10 @@ class AssignAccount(StatesGroup):
     waiting_amount = State()
 
 
+class DownloadAccountsZip(StatesGroup):
+    waiting_amount = State()
+
+
 class AssignProxy(StatesGroup):
     waiting_worker_id = State()
     waiting_amount = State()

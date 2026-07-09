@@ -66,6 +66,7 @@ from tglol.keyboards import (
     confirm_worker_account_stage_menu,
     confirm_delete_worker_menu,
     digit_code_keyboard,
+    download_zip_amount_keyboard,
     main_menu,
     placeholder_menu,
     proxies_storage_keyboard,
@@ -86,7 +87,17 @@ from tglol.keyboards import (
     workers_menu,
 )
 from tglol.paths import unique_path
-from tglol.states import AddByCode, AddBySession, AddByZip, AddProxy, AssignAccount, AssignProxy, CreateWorker, RenameWorker
+from tglol.states import (
+    AddByCode,
+    AddBySession,
+    AddByZip,
+    AddProxy,
+    AssignAccount,
+    AssignProxy,
+    CreateWorker,
+    DownloadAccountsZip,
+    RenameWorker,
+)
 from tglol.telegram_service import get_latest_telegram_code, send_code, sign_in_code, sign_in_password, user_fields
 
 router = Router()
@@ -1463,33 +1474,110 @@ async def download_account_file(callback: CallbackQuery, config: Config) -> None
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("accounts:zip_common:"))
-async def download_common_stage_zip(callback: CallbackQuery, config: Config) -> None:
-    stage = callback.data.rsplit(":", 1)[-1]
+async def _send_common_stage_zip(message: Message, config: Config, stage: str, amount: int) -> tuple[str, bool]:
     if stage not in {"nereg", "reg"}:
-        await callback.answer("Неизвестный раздел.", show_alert=True)
-        return
-    accounts = list_accounts_by_scope(config, worker_id=None, account_stage=stage)
+        return "Неизвестный раздел.", False
+    total = count_accounts_by_stage(config, worker_id=None, account_stage=stage)
+    if total <= 0:
+        return "В этом разделе нет аккаунтов.", False
+    if amount <= 0:
+        return "Количество должно быть больше нуля.", False
+    amount = min(amount, total)
+    accounts = list_accounts(
+        config,
+        limit=amount,
+        offset=0,
+        worker_id=None,
+        account_stage=stage,
+    )
     if not accounts:
-        await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
-        return
+        return "В этом разделе нет аккаунтов.", False
     zip_path, files_count = _make_accounts_zip(config, accounts, stage)
     if files_count == 0:
         try:
             zip_path.unlink(missing_ok=True)
         except OSError:
             pass
-        await callback.answer("Файлы для архива не найдены.", show_alert=True)
-        return
-    await callback.message.answer_document(
+        return "Файлы для архива не найдены.", False
+    await message.answer_document(
         FSInputFile(zip_path),
-        caption=f"Общее хранилище {_stage_title(stage)}: {len(accounts)} аккаунтов, {files_count} файлов.",
+        caption=(
+            f"Общее хранилище {_stage_title(stage)}: "
+            f"выгружено {len(accounts)} из {total} аккаунтов, {files_count} файлов."
+        ),
     )
     try:
         zip_path.unlink(missing_ok=True)
     except OSError:
         pass
-    await callback.answer("ZIP сформирован.")
+    return "ZIP сформирован.", True
+
+
+@router.callback_query(F.data.startswith("accounts:zip_common:"))
+async def download_common_stage_zip_start(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
+    stage = callback.data.rsplit(":", 1)[-1]
+    if stage not in {"nereg", "reg"}:
+        await callback.answer("Неизвестный раздел.", show_alert=True)
+        return
+    total = count_accounts_by_stage(config, worker_id=None, account_stage=stage)
+    if not total:
+        await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
+        return
+    await state.set_state(DownloadAccountsZip.waiting_amount)
+    await state.update_data(download_zip_stage=stage)
+    await callback.message.edit_text(
+        (
+            f"Скачать ZIP из общего {_stage_title(stage)}\n"
+            f"Доступно аккаунтов: {total}\n\n"
+            "Выбери количество или отправь число."
+        ),
+        reply_markup=download_zip_amount_keyboard(total, stage),
+    )
+    await callback.answer()
+
+
+@router.callback_query(DownloadAccountsZip.waiting_amount, F.data.startswith("accounts:zip_amount:"))
+async def download_common_stage_zip_amount_button(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
+    _, _, stage, raw_amount = callback.data.split(":", 3)
+    total = count_accounts_by_stage(config, worker_id=None, account_stage=stage)
+    amount = total if raw_amount == "all" else int(raw_amount)
+    text, done = await _send_common_stage_zip(callback.message, config, stage, amount)
+    await state.clear()
+    nereg_count, reg_count = _common_account_counts(config)
+    await callback.message.edit_text(
+        text,
+        reply_markup=common_storage_sections_menu(nereg_count=nereg_count, reg_count=reg_count),
+    )
+    await callback.answer("ZIP сформирован." if done else text, show_alert=not done)
+
+
+@router.message(DownloadAccountsZip.waiting_amount)
+async def download_common_stage_zip_amount_message(message: Message, state: FSMContext, config: Config) -> None:
+    raw = (message.text or "").strip().lower()
+    data = await state.get_data()
+    stage = data.get("download_zip_stage")
+    if stage not in {"nereg", "reg"}:
+        await state.clear()
+        await message.answer("Раздел выгрузки потерян. Начни заново.")
+        return
+    total = count_accounts_by_stage(config, worker_id=None, account_stage=stage)
+    if raw in {"all", "все", "всё"}:
+        amount = total
+    elif raw.isdigit():
+        amount = int(raw)
+    else:
+        await message.answer("Отправь количество числом или напиши: все.")
+        return
+    text, done = await _send_common_stage_zip(message, config, stage, amount)
+    if done:
+        await state.clear()
+        nereg_count, reg_count = _common_account_counts(config)
+        await message.answer(
+            text,
+            reply_markup=common_storage_sections_menu(nereg_count=nereg_count, reg_count=reg_count),
+        )
+        return
+    await message.answer(text)
 
 
 @router.callback_query(F.data.startswith("account:return_common:"))
