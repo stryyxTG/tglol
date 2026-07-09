@@ -189,6 +189,21 @@ def _bold_value(value) -> str:
     return f"<b>{escape(str(value))}</b>" if value not in (None, "") else "-"
 
 
+def _proxy_display(value) -> str:
+    proxy = str(value or "").strip()
+    host, port, username, password = (proxy.split(":", 3) + ["", "", "", ""])[:4]
+    if not all((host, port, username, password)):
+        return _bold_value(proxy)
+    return "\n".join(
+        (
+            f"<b>IP: {escape(host)}</b>",
+            f"<b>PORT: {escape(port)}</b>",
+            f"<b>USER: {escape(username)}</b>",
+            f"<b>PASS: {escape(password)}</b>",
+        )
+    )
+
+
 async def _clear_worker_code_messages(bot: Bot, chat_id: int) -> None:
     state = WORKER_CODE_MESSAGES.pop(chat_id, None)
     if not state:
@@ -2319,7 +2334,7 @@ async def open_proxy(callback: CallbackQuery, config: Config) -> None:
         await callback.answer("Прокси уже выдан или не найден.", show_alert=True)
         return
     await callback.message.edit_text(
-        f"Прокси #{proxy['id']}\n\n<b>{escape(proxy['proxy'])}</b>",
+        f"Прокси #{proxy['id']}\n\n{_proxy_display(proxy['proxy'])}",
         reply_markup=proxy_detail_keyboard(proxy_id),
     )
     await callback.answer()
@@ -2472,7 +2487,7 @@ async def worker_get_proxy(callback: CallbackQuery, config: Config, current_work
     remaining = count_worker_proxies(config, worker_id, "assigned")
     total = before_total
     await callback.message.answer(
-        f"Прокси:\n<b>{escape(proxy['proxy'])}</b>\n\nОсталось: {remaining}/{total}"
+        f"Прокси:\n{_proxy_display(proxy['proxy'])}\n\nОсталось: {remaining}/{total}"
     )
     await callback.message.edit_text(
         f"Прокси\n\nДоступно: {remaining}/{total}",
