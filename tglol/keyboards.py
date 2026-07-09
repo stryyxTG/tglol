@@ -116,6 +116,13 @@ def _account_label(account) -> str:
     return f"#{account.id} | {name} | {stage} | {account.status}"
 
 
+def _two_column_rows(count: int) -> list[int]:
+    rows = [2] * (count // 2)
+    if count % 2:
+        rows.append(1)
+    return rows
+
+
 def accounts_page_keyboard(
     accounts: Sequence,
     *,
@@ -168,7 +175,7 @@ def accounts_page_keyboard(
         action_count += 1
     builder.button(text="Меню аккаунтов", callback_data="accounts:menu")
     action_count += 1
-    builder.adjust(*([1] * len(accounts)), nav_count, *([1] * action_count))
+    builder.adjust(*_two_column_rows(len(accounts)), nav_count, *([1] * action_count))
     return builder.as_markup()
 
 
@@ -491,7 +498,7 @@ def worker_self_accounts_page_keyboard(
         builder.button(text="Вперед ›", callback_data=f"worker:self:page:{stage}:{page + 1}")
         nav_count += 1
     builder.button(text="Мое хранилище", callback_data="worker:self:menu")
-    builder.adjust(*([1] * len(accounts)), nav_count, 1)
+    builder.adjust(*_two_column_rows(len(accounts)), nav_count, 1)
     return builder.as_markup()
 
 
