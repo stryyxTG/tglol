@@ -1291,30 +1291,6 @@ async def ask_worker_account_stage_first(callback: CallbackQuery, config: Config
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("worker:self_stage_ask2:"))
-async def ask_worker_account_stage_second(callback: CallbackQuery, config: Config, current_worker) -> None:
-    _, _, raw_account_id, target_stage, origin_stage, raw_page = callback.data.split(":", 5)
-    account = get_account(config, int(raw_account_id))
-    if not account or not _worker_can_access_account(account, current_worker):
-        await callback.answer("Аккаунт недоступен.", show_alert=True)
-        return
-    if target_stage == "reg":
-        text = "ПОДТВЕРДИТЕ ЕЩЕ РАЗ: ПОМЕТИТЬ АКК РЕГАННЫМ?"
-    else:
-        text = "ПОДТВЕРДИТЕ ЕЩЕ РАЗ: ПЕРЕНЕСТИ АКК В НЕРЕГ?"
-    await callback.message.edit_text(
-        text,
-        reply_markup=confirm_worker_account_stage_menu(
-            account.id,
-            target_stage,
-            origin_stage,
-            int(raw_page),
-            step=2,
-        ),
-    )
-    await callback.answer()
-
-
 @router.callback_query(F.data.startswith("worker:self_stage_confirm:"))
 async def confirm_worker_account_stage(callback: CallbackQuery, config: Config, current_worker) -> None:
     _, _, raw_account_id, target_stage, _origin_stage, _raw_page = callback.data.split(":", 5)
@@ -2016,31 +1992,6 @@ async def ask_account_stage_first(callback: CallbackQuery, config: Config) -> No
             int(raw_ref),
             int(raw_page),
             step=1,
-        ),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("account:stage_ask2:"))
-async def ask_account_stage_second(callback: CallbackQuery, config: Config) -> None:
-    _, _, raw_account_id, target_stage, origin, raw_ref, raw_page = callback.data.split(":", 6)
-    account = get_account(config, int(raw_account_id))
-    if not account:
-        await callback.answer("Аккаунт не найден.", show_alert=True)
-        return
-    if target_stage == "reg":
-        text = "ПОДТВЕРДИТЕ ЕЩЕ РАЗ: ПОМЕТИТЬ АКК РЕГАННЫМ?"
-    else:
-        text = "ПОДТВЕРДИТЕ ЕЩЕ РАЗ: ПЕРЕНЕСТИ АКК В НЕРЕГ?"
-    await callback.message.edit_text(
-        text,
-        reply_markup=confirm_account_stage_menu(
-            account.id,
-            target_stage,
-            origin,
-            int(raw_ref),
-            int(raw_page),
-            step=2,
         ),
     )
     await callback.answer()

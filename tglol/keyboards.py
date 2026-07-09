@@ -268,8 +268,8 @@ def confirm_account_stage_menu(
     step: int,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    next_step = "ask2" if step == 1 else "confirm"
-    label = "ДА, ПРОДОЛЖИТЬ" if step == 1 else "ДА, ПОДТВЕРЖДАЮ"
+    next_step = "confirm"
+    label = "ДА"
     builder.button(
         text=label,
         callback_data=f"account:stage_{next_step}:{account_id}:{target_stage}:{origin}:{ref_id}:{page}",
@@ -517,8 +517,8 @@ def confirm_worker_account_stage_menu(
     step: int,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    next_step = "ask2" if step == 1 else "confirm"
-    label = "ДА, ПРОДОЛЖИТЬ" if step == 1 else "ДА, ПОДТВЕРЖДАЮ"
+    next_step = "confirm"
+    label = "ДА"
     builder.button(
         text=label,
         callback_data=f"worker:self_stage_{next_step}:{account_id}:{target_stage}:{origin_stage}:{page}",
