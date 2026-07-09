@@ -1529,7 +1529,7 @@ async def download_common_stage_zip_start(callback: CallbackQuery, state: FSMCon
         (
             f"Скачать ZIP из общего {_stage_title(stage)}\n"
             f"Доступно аккаунтов: {total}\n\n"
-            "Выбери количество или отправь число."
+            "Отправь количество числом или нажми «Скачать всё»."
         ),
         reply_markup=download_zip_amount_keyboard(total, stage),
     )
