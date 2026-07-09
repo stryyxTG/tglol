@@ -174,6 +174,10 @@ def _copyable(value) -> str:
     return f"<code>{escape(str(value))}</code>" if value not in (None, "") else "-"
 
 
+def _bold_value(value) -> str:
+    return f"<b>{escape(str(value))}</b>" if value not in (None, "") else "-"
+
+
 async def _clear_worker_code_messages(bot: Bot, chat_id: int) -> None:
     state = WORKER_CODE_MESSAGES.pop(chat_id, None)
     if not state:
@@ -553,7 +557,7 @@ def _account_detail_text(account, config: Config) -> str:
     return (
         f"<b>Аккаунт #{account.id}</b> · {stage}\n"
         f"Статус: <code>{_text(account.status)}</code>\n\n"
-        f"Телефон:\n{_copyable(_format_phone(account.phone))}\n\n"
+        f"Телефон:\n{_bold_value(_format_phone(account.phone))}\n\n"
         f"Username: {_username(account.username)}\n"
         f"User ID: {_copyable(account.telegram_user_id)}\n\n"
         f"JSON: {_text(account.json_source)}\n"
@@ -567,7 +571,7 @@ def _worker_account_detail_text(account) -> str:
     return (
         f"<b>Аккаунт #{account.id}</b> · {stage}\n"
         f"Статус: <code>{_text(account.status)}</code>\n\n"
-        f"Телефон:\n{_copyable(_format_phone(account.phone))}\n\n"
+        f"Телефон:\n{_bold_value(_format_phone(account.phone))}\n\n"
         f"Username: {_username(account.username)}"
     )
 
@@ -1338,7 +1342,7 @@ async def send_worker_account_phone(callback: CallbackQuery, config: Config, cur
     if not account.phone:
         await callback.answer("Номер не указан.", show_alert=True)
         return
-    await callback.message.answer(_copyable(_format_phone(account.phone)))
+    await callback.message.answer(_bold_value(_format_phone(account.phone)))
     await callback.answer("Номер отправлен.")
 
 
@@ -1386,7 +1390,7 @@ async def send_account_phone(callback: CallbackQuery, config: Config) -> None:
     if not account.phone:
         await callback.answer("Номер не указан.", show_alert=True)
         return
-    await callback.message.answer(_copyable(_format_phone(account.phone)))
+    await callback.message.answer(_bold_value(_format_phone(account.phone)))
     await callback.answer("Номер отправлен.")
 
 
