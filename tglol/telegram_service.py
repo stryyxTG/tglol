@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from dataclasses import dataclass
 import logging
 from pathlib import Path
 import re
+from time import monotonic
 from typing import Any
 
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
+from telethon.tl.functions.account import UpdateStatusRequest
+from telethon.tl.functions.updates import GetStateRequest
 from telethon.tl.types import User
 
 
@@ -15,6 +20,12 @@ CODE_RE = re.compile(r"(?<!\d)(\d[\d\s-]{2,14}\d)(?!\d)")
 CODE_CONTEXT_RE = re.compile(r"\b(code|verification|verify|otp|passcode|парол|код|подтверж)\b", re.IGNORECASE)
 VERIFICATION_CODE_PEERS = ("VerificationCodes", "@VerificationCodes")
 logger = logging.getLogger(__name__)
+
+ACCOUNT_ACTIVITY_TTL = 10 * 60
+_active_clients: dict[str, TelegramClient] = {}
+_active_until: dict[str, float] = {}
+_active_cleanup_tasks: dict[str, asyncio.Task[None]] = {}
+_active_locks: dict[str, asyncio.Lock] = {}
 
 
 @dataclass(frozen=True)
@@ -48,6 +59,101 @@ def client_for(
         retry_delay=1,
         timeout=10,
     )
+
+
+def _session_key(session_path: Path) -> str:
+    return str(session_path.resolve()).casefold()
+
+
+async def _disconnect_after_activity(key: str, client: TelegramClient) -> None:
+    try:
+        while _active_clients.get(key) is client:
+            delay = _active_until.get(key, 0.0) - monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
+                continue
+
+            _active_clients.pop(key, None)
+            _active_until.pop(key, None)
+            with suppress(Exception):
+                await client(UpdateStatusRequest(offline=True))
+            if client.is_connected():
+                await client.disconnect()
+            return
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.info('Cannot close active Telegram session %s: %s', key, exc)
+    finally:
+        if _active_cleanup_tasks.get(key) is asyncio.current_task():
+            _active_cleanup_tasks.pop(key, None)
+
+
+async def _get_active_client(
+    session_path: Path,
+    api_id: int,
+    api_hash: str,
+    runtime: dict[str, str],
+) -> TelegramClient:
+    key = _session_key(session_path)
+    lock = _active_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        client = _active_clients.get(key)
+        cleanup_task = _active_cleanup_tasks.get(key)
+        if client is None or not client.is_connected():
+            if cleanup_task is not None and not cleanup_task.done():
+                cleanup_task.cancel()
+            if client is not None:
+                with suppress(Exception):
+                    await client.disconnect()
+            client = client_for(session_path, api_id, api_hash, runtime)
+            await client.connect()
+            if not await client.is_user_authorized():
+                await client.disconnect()
+                raise RuntimeError('session is not authorized')
+            _active_clients[key] = client
+            cleanup_task = None
+
+        _active_until[key] = monotonic() + ACCOUNT_ACTIVITY_TTL
+        if cleanup_task is None or cleanup_task.done():
+            _active_cleanup_tasks[key] = asyncio.create_task(_disconnect_after_activity(key, client))
+        return client
+
+
+async def activate_account_session(
+    session_path: Path,
+    api_id: int,
+    api_hash: str,
+    runtime: dict[str, str],
+) -> User:
+    '''Wake an authorized account and keep its MTProto connection alive temporarily.'''
+    client = await _get_active_client(session_path, api_id, api_hash, runtime)
+    await client(UpdateStatusRequest(offline=False))
+    await client(GetStateRequest())
+    await client.get_dialogs(limit=1)
+    me = await client.get_me()
+    if me is None:
+        raise RuntimeError('authorized session has no account data')
+    return me
+
+
+async def close_active_sessions() -> None:
+    tasks = list(_active_cleanup_tasks.values())
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    clients = list(_active_clients.values())
+    _active_clients.clear()
+    _active_until.clear()
+    _active_cleanup_tasks.clear()
+    _active_locks.clear()
+    for client in clients:
+        with suppress(Exception):
+            if client.is_connected():
+                await client(UpdateStatusRequest(offline=True))
+                await client.disconnect()
 
 
 async def send_code(
@@ -195,22 +301,18 @@ async def get_latest_telegram_code(
     *,
     limit: int = 15,
 ) -> str | None:
-    client = client_for(session_path, api_id, api_hash, runtime)
-    await client.connect()
-    try:
-        if not await client.is_user_authorized():
-            raise RuntimeError("session is not authorized")
+    client = await _get_active_client(session_path, api_id, api_hash, runtime)
+    await client(UpdateStatusRequest(offline=False))
+    await client(GetStateRequest())
 
-        for peer in VERIFICATION_CODE_PEERS:
-            try:
-                async for message in client.iter_messages(peer, limit=limit):
-                    text = message.message or ""
-                    codes = extract_verification_codes(text)
-                    if codes:
-                        return codes[0]
-            except Exception as exc:
-                logger.info("Cannot read verification codes from peer %s: %s", peer, exc)
-                continue
-        return None
-    finally:
-        await client.disconnect()
+    for peer in VERIFICATION_CODE_PEERS:
+        try:
+            async for message in client.iter_messages(peer, limit=limit):
+                text = message.message or ""
+                codes = extract_verification_codes(text)
+                if codes:
+                    return codes[0]
+        except Exception as exc:
+            logger.info("Cannot read verification codes from peer %s: %s", peer, exc)
+            continue
+    return None

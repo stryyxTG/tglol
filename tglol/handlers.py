@@ -3,6 +3,7 @@ from __future__ import annotations
 from html import escape
 from math import ceil
 from pathlib import Path
+import logging
 import re
 import secrets
 import shutil
@@ -98,9 +99,17 @@ from tglol.states import (
     DownloadAccountsZip,
     RenameWorker,
 )
-from tglol.telegram_service import get_latest_telegram_code, send_code, sign_in_code, sign_in_password, user_fields
+from tglol.telegram_service import (
+    activate_account_session,
+    get_latest_telegram_code,
+    send_code,
+    sign_in_code,
+    sign_in_password,
+    user_fields,
+)
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 WORKER_CODE_MESSAGES: dict[int, dict[str, object]] = {}
 
@@ -612,6 +621,19 @@ def _account_connection_params(account, config: Config) -> tuple[int, str, dict[
     api_id, api_hash = pick_api(data, config)
     runtime = runtime_from_json(data or {})
     return api_id, api_hash, runtime
+
+
+async def _activate_account(account, config: Config) -> str | None:
+    session_path = Path(account.session_path)
+    if not session_path.exists():
+        return 'Session файл не найден'
+    try:
+        api_id, api_hash, runtime = _account_connection_params(account, config)
+        await activate_account_session(session_path, api_id, api_hash, runtime)
+        return None
+    except Exception as exc:
+        logger.warning('Account activity failed: account_id=%s error=%s', account.id, exc)
+        return str(exc)
 
 
 def _add_target_worker_id(data: dict) -> int | None:
@@ -1281,6 +1303,7 @@ async def show_worker_self_account(callback: CallbackQuery, bot: Bot, config: Co
         await callback.answer("Аккаунт недоступен.", show_alert=True)
         return
     await _clear_worker_code_messages_if_account_changed(bot, callback.message.chat.id, account.id)
+    activity_error = await _activate_account(account, config)
     await callback.message.edit_text(
         _worker_account_detail_text(account),
         reply_markup=worker_self_account_detail_menu(
@@ -1290,7 +1313,10 @@ async def show_worker_self_account(callback: CallbackQuery, bot: Bot, config: Co
             account_stage=account.account_stage,
         ),
     )
-    await callback.answer()
+    if activity_error:
+        await callback.answer(f'Карточка открыта, но сессия не активировалась: {activity_error}', show_alert=True)
+    else:
+        await callback.answer('Аккаунт активирован на 10 минут.')
 
 
 @router.callback_query(F.data.startswith("worker:self_stage_ask1:"))
@@ -1440,6 +1466,7 @@ async def show_account_detail_callback(callback: CallbackQuery, config: Config) 
     if not account:
         await callback.answer("Аккаунт не найден.", show_alert=True)
         return
+    activity_error = await _activate_account(account, config)
     await callback.message.edit_text(
         _account_detail_text(account, config),
         reply_markup=account_detail_menu(
@@ -1450,7 +1477,10 @@ async def show_account_detail_callback(callback: CallbackQuery, config: Config) 
             page=int(raw_page),
         ),
     )
-    await callback.answer()
+    if activity_error:
+        await callback.answer(f'Карточка открыта, но сессия не активировалась: {activity_error}', show_alert=True)
+    else:
+        await callback.answer('Аккаунт активирован на 10 минут.')
 
 
 @router.message(F.text.regexp(r"^/account_\d+$"))
@@ -1466,10 +1496,13 @@ async def show_account_detail_message(message: Message, config: Config) -> None:
     else:
         origin = "common_reg" if account.account_stage == "reg" else "common_nereg"
     ref_id = account.worker_id or 0
+    activity_error = await _activate_account(account, config)
     await message.answer(
         _account_detail_text(account, config),
         reply_markup=account_detail_menu(account.id, account_stage=account.account_stage, origin=origin, ref_id=ref_id, page=0),
     )
+    if activity_error:
+        await message.answer(f'Карточка открыта, но сессия не активировалась: {activity_error}')
 
 
 @router.callback_query(F.data.startswith("accounts:file:"))

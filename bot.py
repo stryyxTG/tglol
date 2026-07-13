@@ -8,6 +8,7 @@ from tglol.config import load_config
 from tglol.db import init_db
 from tglol.handlers import router
 from tglol.paths import ensure_storage
+from tglol.telegram_service import close_active_sessions
 
 
 async def main() -> None:
@@ -23,7 +24,11 @@ async def main() -> None:
     dp = Dispatcher()
     dp.include_router(router)
 
-    await dp.start_polling(bot, config=config)
+    try:
+        await dp.start_polling(bot, config=config)
+    finally:
+        await close_active_sessions()
+        await bot.session.close()
 
 
 if __name__ == "__main__":
